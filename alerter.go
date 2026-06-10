@@ -6,6 +6,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 )
@@ -45,6 +46,14 @@ func (a *Alerter) EmitAlert(alert WhaleTrade) {
 		"wallet", alert.Trade.Wallet,
 		"full_alert", json.RawMessage(raw),
 	)
+
+	// Output readable summary in simple English to the terminal
+	fmt.Printf("__________________________________________________\n")
+	fmt.Printf("USD Value of position: $%.2f\n", alert.Trade.USDValue)
+	fmt.Printf("Market Name:           %s\n", alert.Market.Question)
+	fmt.Printf("Side:                  %s\n", alert.Trade.Side)
+	fmt.Printf("Predicted outcome:     %s\n", alert.Trade.Outcome)
+	fmt.Printf("__________________________________________________\n\n")
 }
 
 // EmitSummary logs a cycle summary — useful for health monitoring.

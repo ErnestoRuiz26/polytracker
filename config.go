@@ -45,6 +45,9 @@ type Config struct {
 	GammaBaseURL string `json:"gamma_base_url"`
 	DataBaseURL  string `json:"data_base_url"`
 	CLOBBaseURL  string `json:"clob_base_url"`
+
+	// RateLimitRPS caps the total requests per second made by the client.
+	RateLimitRPS int `json:"rate_limit_rps"`
 }
 
 // Duration wraps time.Duration so it can be unmarshaled from a JSON string
@@ -119,6 +122,7 @@ func defaults() *Config {
 		GammaBaseURL:          "https://gamma-api.polymarket.com",
 		DataBaseURL:           "https://data-api.polymarket.com",
 		CLOBBaseURL:           "https://clob.polymarket.com",
+		RateLimitRPS:          10,
 	}
 }
 
@@ -168,6 +172,11 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("PT_CLOB_URL"); v != "" {
 		cfg.CLOBBaseURL = v
+	}
+	if v := os.Getenv("PT_RATE_LIMIT_RPS"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.RateLimitRPS = i
+		}
 	}
 }
 

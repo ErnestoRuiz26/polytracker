@@ -8,5 +8,6 @@
   "max_markets_per_cycle": 500,
   "gamma_base_url": "https://gamma-api.polymarket.com",
   "data_base_url": "https://data-api.polymarket.com",
-  "clob_base_url": "https://clob.polymarket.com"
+  "clob_base_url": "https://clob.polymarket.com",
+  "rate_limit_rps": 10
 }

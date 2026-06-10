@@ -24,16 +24,23 @@ const (
 	userAgent      = "polytracker/1.0"
 )
 
-// Client wraps an HTTP client with Polymarket API base URLs.
+// Client wraps an HTTP client with Polymarket API base URLs and a rate limiter.
 type Client struct {
 	http     *http.Client
 	gammaURL string
 	dataURL  string
 	clobURL  string
+	limiter  <-chan time.Time
 }
 
 // NewClient creates a Client from the provided config.
 func NewClient(cfg *Config) *Client {
+	var limiter <-chan time.Time
+	if cfg.RateLimitRPS > 0 {
+		interval := time.Second / time.Duration(cfg.RateLimitRPS)
+		limiter = time.Tick(interval)
+	}
+
 	return &Client{
 		http: &http.Client{
 			Timeout: httpTimeout,
@@ -45,6 +52,7 @@ func NewClient(cfg *Config) *Client {
 		gammaURL: cfg.GammaBaseURL,
 		dataURL:  cfg.DataBaseURL,
 		clobURL:  cfg.CLOBBaseURL,
+		limiter:  limiter,
 	}
 }
 
@@ -206,6 +214,14 @@ func (c *Client) getJSON(ctx context.Context, rawURL string, dest interface{}) e
 			case <-time.After(delay):
 			}
 			slog.Debug("retrying request", "url", rawURL, "attempt", attempt)
+		}
+
+		if c.limiter != nil {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-c.limiter:
+			}
 		}
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
