@@ -6,8 +6,8 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"log/slog"
-	"os"
 )
 
 // Alerter handles formatting and emitting whale trade alerts.
@@ -15,12 +15,10 @@ type Alerter struct {
 	logger *slog.Logger
 }
 
-// NewAlerter creates an Alerter that writes JSON to stdout.
-// Uses a separate slog instance so alert output doesn't mix
-// with operational logs (which go to stderr).
-func NewAlerter() *Alerter {
+// NewAlerter creates an Alerter that writes JSON to the provided writer.
+func NewAlerter(w io.Writer) *Alerter {
 	return &Alerter{
-		logger: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		logger: slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{
 			// Alerts are always at INFO level — never suppressed.
 			Level: slog.LevelInfo,
 		})),
