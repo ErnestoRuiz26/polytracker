@@ -27,7 +27,7 @@ func main() {
 
 	slog.Info("polytracker starting",
 		"threshold_pct", cfg.AlertThreshold*100,
-		"poll_interval", cfg.PollInterval.String(),
+		"poll_interval", cfg.PollInterval.Duration.String(),
 		"min_oi", cfg.MinOpenInterest,
 		"max_oi", cfg.MaxOpenInterest,
 		"max_concurrency", cfg.MaxConcurrency,
@@ -60,10 +60,10 @@ func main() {
 	}
 
 	// Tickers for the two loops.
-	pollTicker := time.NewTicker(cfg.PollInterval)
+	pollTicker := time.NewTicker(cfg.PollInterval.Duration)
 	defer pollTicker.Stop()
 
-	refreshTicker := time.NewTicker(cfg.MarketRefreshInterval)
+	refreshTicker := time.NewTicker(cfg.MarketRefreshInterval.Duration)
 	defer refreshTicker.Stop()
 
 	// Run one poll cycle immediately, then enter the tick loop.

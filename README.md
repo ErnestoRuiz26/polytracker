@@ -16,7 +16,76 @@ go build -o polytracker .
 ./polytracker
 ```
 
-That's it. No API keys, no config files, no external dependencies. The service starts monitoring all active Polymarket markets with open interest ≥ $10K and flags any single trade exceeding 5% of the market's OI.
+That's it. No API keys, no external dependencies. The service reads `settings.json` in the working directory and starts monitoring active Polymarket markets.
+
+---
+
+## Configuration
+
+All settings live in **`settings.json`** alongside the binary. Edit this file to tune the detector:
+
+```json
+{
+  "alert_threshold": 0.05,
+  "poll_interval": "60s",
+  "market_refresh_interval": "5m",
+  "max_concurrency": 10,
+  "min_open_interest": 10000,
+  "max_open_interest": 0,
+  "max_markets_per_cycle": 500,
+  "gamma_base_url": "https://gamma-api.polymarket.com",
+  "data_base_url": "https://data-api.polymarket.com",
+  "clob_base_url": "https://clob.polymarket.com"
+}
+```
+
+### Settings Reference
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `alert_threshold` | `0.05` | Trade/OI ratio to trigger alert (0.05 = 5%) |
+| `poll_interval` | `"60s"` | How often to check each market for new trades |
+| `market_refresh_interval` | `"5m"` | How often to rebuild the active market list |
+| `max_concurrency` | `10` | Max parallel API calls |
+| `min_open_interest` | `10000` | Minimum open interest (USD) — markets below this are ignored |
+| `max_open_interest` | `0` | Maximum open interest (USD) — `0` means no upper limit |
+| `max_markets_per_cycle` | `500` | Cap on total markets to monitor |
+| `gamma_base_url` | `"https://gamma-api.polymarket.com"` | Gamma API base URL |
+| `data_base_url` | `"https://data-api.polymarket.com"` | Data API base URL |
+| `clob_base_url` | `"https://clob.polymarket.com"` | CLOB API base URL |
+
+Duration fields accept Go duration strings: `"30s"`, `"2m"`, `"1h30m"`, etc.
+
+### Environment Variable Overrides
+
+For containerized deployments, every setting can be overridden via environment variables. Env vars take precedence over `settings.json`:
+
+| Env Variable | Overrides |
+|--------------|-----------|
+| `PT_ALERT_THRESHOLD` | `alert_threshold` |
+| `PT_POLL_INTERVAL` | `poll_interval` |
+| `PT_MARKET_REFRESH` | `market_refresh_interval` |
+| `PT_MAX_CONCURRENCY` | `max_concurrency` |
+| `PT_MIN_OI` | `min_open_interest` |
+| `PT_MAX_OI` | `max_open_interest` |
+| `PT_MAX_MARKETS` | `max_markets_per_cycle` |
+| `PT_GAMMA_URL` | `gamma_base_url` |
+| `PT_DATA_URL` | `data_base_url` |
+| `PT_CLOB_URL` | `clob_base_url` |
+| `PT_SETTINGS_FILE` | Path to settings file (default: `settings.json`) |
+
+### Example Configurations
+
+```bash
+# Use settings.json with all defaults
+./polytracker
+
+# Override the settings file path
+PT_SETTINGS_FILE=/etc/polytracker/prod.json ./polytracker
+
+# Quick override without editing the file
+PT_ALERT_THRESHOLD=0.03 PT_MIN_OI=5000 ./polytracker
+```
 
 ---
 
@@ -82,7 +151,7 @@ Alerts are written to **stdout** as single-line JSON (one per trade). Operationa
 }
 ```
 
-This makes it easy to pipe into log aggregators (Datadog, ELK, Loki) or downstream scripts:
+### Piping and Filtering
 
 ```bash
 # Save alerts to a file, keep operational logs on screen
@@ -97,49 +166,18 @@ This makes it easy to pipe into log aggregators (Datadog, ELK, Loki) or downstre
 
 ---
 
-## Configuration
-
-All settings are controlled via environment variables. No config files needed.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PT_ALERT_THRESHOLD` | `0.05` | Trade/OI ratio to trigger alert (0.05 = 5%) |
-| `PT_POLL_INTERVAL` | `60s` | How often to check each market for new trades |
-| `PT_MARKET_REFRESH` | `5m` | How often to rebuild the active market list |
-| `PT_MAX_CONCURRENCY` | `10` | Max parallel API calls |
-| `PT_MIN_OI` | `10000` | Minimum open interest in USD — markets below this are ignored |
-| `PT_MAX_OI` | `0` | Maximum open interest in USD — 0 means no upper limit |
-| `PT_MAX_MARKETS` | `500` | Cap on total markets to monitor |
-| `PT_GAMMA_URL` | `https://gamma-api.polymarket.com` | Gamma API base URL |
-| `PT_DATA_URL` | `https://data-api.polymarket.com` | Data API base URL |
-| `PT_CLOB_URL` | `https://clob.polymarket.com` | CLOB API base URL |
-
-### Examples
-
-```bash
-# Lower threshold to 3%, only watch markets with OI between $5K and $500K
-PT_ALERT_THRESHOLD=0.03 PT_MIN_OI=5000 PT_MAX_OI=500000 ./polytracker
-
-# Poll more aggressively (every 30s), higher concurrency
-PT_POLL_INTERVAL=30s PT_MAX_CONCURRENCY=20 ./polytracker
-
-# Durations accept Go duration strings: "30s", "2m", "1h"
-PT_POLL_INTERVAL=30s PT_MARKET_REFRESH=10m ./polytracker
-```
-
----
-
 ## Architecture
 
 ```
 polytracker/
-├── main.go        Orchestrator: polling loop, market refresh, graceful shutdown
-├── config.go      Environment-based configuration with sensible defaults
-├── types.go       Data structures for API responses and alert payloads
-├── api.go         HTTP client for Gamma, Data, and CLOB APIs (retry + backoff)
-├── detector.go    Threshold detection, trade dedup, enrichment pipeline
-├── alerter.go     Structured JSON alert output via slog
-└── go.mod         Module definition (stdlib only, no external deps)
+├── main.go          Orchestrator: polling loop, market refresh, graceful shutdown
+├── config.go        Settings file loader with env var overrides
+├── types.go         Data structures for API responses and alert payloads
+├── api.go           HTTP client for Gamma, Data, and CLOB APIs (retry + backoff)
+├── detector.go      Threshold detection, trade dedup, enrichment pipeline
+├── alerter.go       Structured JSON alert output via slog
+├── settings.json    Configuration file (edit this)
+└── go.mod           Module definition (stdlib only, no external deps)
 ```
 
 ### Polymarket APIs Used
@@ -155,7 +193,7 @@ All endpoints are public and require no authentication.
 ### Rate Limiting
 
 The service is designed to be API-friendly:
-- **Concurrency is bounded** by a semaphore pool (`PT_MAX_CONCURRENCY`, default 10)
+- **Concurrency is bounded** by a semaphore pool (`max_concurrency`, default 10)
 - **Expensive calls** (midpoint, order book, holders) only fire on flagged trades, not every market
 - **Failed requests** retry with exponential backoff (500ms → 1s → 2s, max 3 attempts)
 - **429/5xx responses** are retried automatically; 4xx errors fail immediately
