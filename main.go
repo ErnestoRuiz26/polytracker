@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -15,6 +16,15 @@ import (
 )
 
 func main() {
+	banner := " ____       _       _____             _             \n" +
+		"|  _ \\ ___ | |_   _|_   _| __ __ _  ___| | _____ _ __ \n" +
+		"| |_) / _ \\| | | | | | || '__/ _` |/ __| |/ / _ \\ '__|\n" +
+		"|  __/ (_) | | |_| | | || | | (_| | (__|   <  __/ |   \n" +
+		"|_|   \\___/|_|\\__, | |_||_|  \\__,_|\\___|_|\\_\\___|_|   \n" +
+		"              |___/                                   \n" +
+		"  >> Polymarket Whale Tracker\n"
+	fmt.Println(banner)
+
 	// Operational logs go to stderr as JSON so they don't mix with alerts on stdout.
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
