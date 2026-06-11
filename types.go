@@ -142,16 +142,18 @@ type WhaleMarket struct {
 	Question    string `json:"question"`
 	ConditionID string `json:"conditionId"`
 	Slug        string `json:"slug"`
+	MarketURL   string `json:"marketUrl"`
 }
 
 type WhaleTradeLeg struct {
-	Size     float64 `json:"size"`
-	Price    float64 `json:"price"`
-	USDValue float64 `json:"usdValue"`
-	Side     string  `json:"side"`
-	Outcome  string  `json:"outcome"`
-	Wallet   string  `json:"wallet"`
-	TxHash   string  `json:"txHash"`
+	Size      float64 `json:"size"`
+	Price     float64 `json:"price"`
+	USDValue  float64 `json:"usdValue"`
+	Side      string  `json:"side"`
+	Outcome   string  `json:"outcome"`
+	Wallet    string  `json:"wallet"`
+	TxHash    string  `json:"txHash"`
+	Timestamp int64   `json:"timestamp"`
 }
 
 type WhaleContext struct {

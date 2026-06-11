@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 )
 
 // Alerter handles formatting and emitting whale trade alerts.
@@ -48,11 +49,14 @@ func (a *Alerter) EmitAlert(alert WhaleTrade) {
 	)
 
 	// Output readable summary in simple English to the terminal
+	placedTime := time.Unix(alert.Trade.Timestamp, 0).UTC().Format("2006-01-02 15:04:05 MST")
 	fmt.Printf("__________________________________________________\n")
 	fmt.Printf("USD Value of position: $%.2f\n", alert.Trade.USDValue)
 	fmt.Printf("Market Name:           %s\n", alert.Market.Question)
+	fmt.Printf("Placed At:             %s\n", placedTime)
 	fmt.Printf("Side:                  %s\n", alert.Trade.Side)
 	fmt.Printf("Predicted outcome:     %s\n", alert.Trade.Outcome)
+	fmt.Printf("Market Link:           %s\n", alert.Market.MarketURL)
 	fmt.Printf("__________________________________________________\n\n")
 }
 
