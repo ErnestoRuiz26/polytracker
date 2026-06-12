@@ -5,7 +5,9 @@ package main
 // across markets. Shuts down gracefully on SIGINT/SIGTERM.
 
 import (
+	"bufio"
 	"context"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -18,6 +20,16 @@ import (
 	"time"
 )
 
+func printUsage() {
+	fmt.Println("Usage: ./polytracker [COMMAND] [FLAGS]")
+	fmt.Println("\nCommands:")
+	fmt.Println("  help                             Show this help message")
+	fmt.Println("  track                            Start tracking all active markets for whale trades")
+	fmt.Println("  track --wallet=[WALLET_ID]       Start tracking trade history and new trades for a specific wallet ID")
+	fmt.Println("\nFlags for 'track':")
+	fmt.Println("  --wallet=[WALLET_ID]             (Optional) Specific wallet address to track")
+}
+
 func main() {
 	banner := " ____       _       _____             _             \n" +
 		"|  _ \\ ___ | |_   _|_   _| __ __ _  ___| | _____ _ __ \n" +
@@ -28,7 +40,34 @@ func main() {
 		"  >> Polymarket Whale Tracker\n"
 	fmt.Println(banner)
 
-	logFile, err := setupLogging()
+	if len(os.Args) < 2 {
+		printUsage()
+		os.Exit(1)
+	}
+
+	cmd := os.Args[1]
+	if cmd == "help" || cmd == "-h" || cmd == "--help" {
+		printUsage()
+		os.Exit(0)
+	}
+
+	if cmd != "track" {
+		fmt.Printf("Unknown command: %s\n\n", cmd)
+		printUsage()
+		os.Exit(1)
+	}
+
+	trackCmd := flag.NewFlagSet("track", flag.ExitOnError)
+	var walletID string
+	trackCmd.StringVar(&walletID, "wallet", "", "Specific wallet address to track")
+	_ = trackCmd.Parse(os.Args[2:])
+
+	cmdFlag := "track"
+	if walletID != "" {
+		cmdFlag = "track_wallet_" + walletID
+	}
+
+	logFile, err := setupLogging(cmdFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to setup logging: %v\n", err)
 		os.Exit(1)
@@ -41,6 +80,7 @@ func main() {
 	alerter := NewAlerter(logFile)
 
 	slog.Info("polytracker starting",
+		"command", cmdFlag,
 		"threshold_pct", cfg.AlertThreshold*100,
 		"poll_interval", cfg.PollInterval.Duration.String(),
 		"min_oi", cfg.MinOpenInterest,
@@ -60,47 +100,132 @@ func main() {
 		cancel()
 	}()
 
-	// Bootstrap: fetch markets before entering the main loop.
-	markets, err := refreshMarkets(ctx, client, cfg)
-	if err != nil {
-		slog.Error("initial market fetch failed", "error", err)
-		os.Exit(1)
-	}
-	slog.Info("markets loaded", "count", len(markets))
+	if walletID != "" {
+		slog.Info("wallet tracking mode active", "wallet", walletID)
 
-	// Bail immediately if we were cancelled during the (slow) market load.
-	if ctx.Err() != nil {
-		slog.Info("polytracker stopped (cancelled during startup)")
-		return
-	}
+		// 1. Fetch and paginate historical trades on startup
+		offset := 0
+		limit := 10
+		var maxTS int64
+		scanner := bufio.NewScanner(os.Stdin)
 
-	// Tickers for the two loops.
-	pollTicker := time.NewTicker(cfg.PollInterval.Duration)
-	defer pollTicker.Stop()
-
-	refreshTicker := time.NewTicker(cfg.MarketRefreshInterval.Duration)
-	defer refreshTicker.Stop()
-
-	// Run one poll cycle immediately, then enter the tick loop.
-	runPollCycle(ctx, detector, alerter, markets, cfg.MaxConcurrency)
-
-	for {
-		select {
-		case <-ctx.Done():
-			slog.Info("polytracker stopped")
-			return
-
-		case <-refreshTicker.C:
-			updated, err := refreshMarkets(ctx, client, cfg)
+		for {
+			fmt.Printf("\nFetching historical trades for wallet %s (offset: %d, limit: %d)...\n", walletID, offset, limit)
+			trades, err := client.FetchUserTrades(ctx, walletID, limit, offset)
 			if err != nil {
-				slog.Warn("market refresh failed, using stale list", "error", err)
-			} else {
-				markets = updated
-				slog.Info("markets refreshed", "count", len(markets))
+				slog.Error("failed to fetch user trades", "error", err)
+				break
+			}
+			if len(trades) == 0 {
+				fmt.Println("No more historical trades found.")
+				break
 			}
 
-		case <-pollTicker.C:
-			runPollCycle(ctx, detector, alerter, markets, cfg.MaxConcurrency)
+			// Enrich trades
+			enriched, err := detector.EnrichTradesDirect(ctx, trades)
+			if err != nil {
+				slog.Error("failed to enrich user trades", "error", err)
+				break
+			}
+
+			// Track the newest timestamp to initialize the seen checkpoint
+			for _, t := range trades {
+				if t.Timestamp > maxTS {
+					maxTS = t.Timestamp
+				}
+			}
+
+			// Sort by execution timestamp in descending order (latest to oldest)
+			sort.Slice(enriched, func(i, j int) bool {
+				return enriched[i].Trade.Timestamp > enriched[j].Trade.Timestamp
+			})
+
+			// Print them
+			for _, alert := range enriched {
+				alerter.EmitAlert(alert)
+			}
+
+			// Prompt the user for next batch or enter real-time
+			fmt.Print("Type 'next' to load the next 10 historical trades, or press [Enter] to start real-time tracking: ")
+			if !scanner.Scan() {
+				break
+			}
+			input := strings.TrimSpace(scanner.Text())
+			if strings.ToLower(input) == "next" {
+				offset += limit
+			} else {
+				break
+			}
+		}
+
+		// Transition to real-time tracking
+		fmt.Println("\nStarting real-time tracking...")
+		if maxTS > 0 {
+			detector.mu.Lock()
+			detector.seen[walletID] = maxTS
+			detector.mu.Unlock()
+		}
+
+		// Loop polling for new trades of the wallet
+		pollTicker := time.NewTicker(cfg.PollInterval.Duration)
+		defer pollTicker.Stop()
+
+		// Run check immediately, then ticker
+		runWalletPollCycle(ctx, detector, alerter, walletID)
+
+		for {
+			select {
+			case <-ctx.Done():
+				slog.Info("polytracker stopped")
+				return
+			case <-pollTicker.C:
+				runWalletPollCycle(ctx, detector, alerter, walletID)
+			}
+		}
+	} else {
+		// Default Mode: Monitor all markets
+		// Bootstrap: fetch markets before entering the main loop.
+		markets, err := refreshMarkets(ctx, client, cfg)
+		if err != nil {
+			slog.Error("initial market fetch failed", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("markets loaded", "count", len(markets))
+
+		// Bail immediately if we were cancelled during the (slow) market load.
+		if ctx.Err() != nil {
+			slog.Info("polytracker stopped (cancelled during startup)")
+			return
+		}
+
+		// Tickers for the two loops.
+		pollTicker := time.NewTicker(cfg.PollInterval.Duration)
+		defer pollTicker.Stop()
+
+		refreshTicker := time.NewTicker(cfg.MarketRefreshInterval.Duration)
+		defer refreshTicker.Stop()
+
+		// Run one poll cycle immediately, then enter the tick loop.
+		runPollCycle(ctx, detector, alerter, markets, cfg.MaxConcurrency)
+
+		for {
+			select {
+			case <-ctx.Done():
+				slog.Info("polytracker stopped")
+				return
+
+			case <-refreshTicker.C:
+				updated, err := refreshMarkets(ctx, client, cfg)
+				if err != nil {
+					slog.Warn("market refresh failed, using stale list", "error", err)
+				} else {
+					markets = updated
+					slog.Info("markets refreshed", "count", len(markets))
+				}
+
+			case <-pollTicker.C:
+				runPollCycle(ctx, detector, alerter, markets, cfg.MaxConcurrency)
+			}
 		}
 	}
 }
@@ -187,7 +312,7 @@ func runPollCycle(ctx context.Context, detector *Detector, alerter *Alerter, mar
 
 	sem := make(chan struct{}, maxConcurrency)
 	var wg sync.WaitGroup
-	var totalAlerts int
+	var allAlerts []WhaleTrade
 	var mu sync.Mutex
 
 	for _, m := range markets {
@@ -218,13 +343,9 @@ func runPollCycle(ctx context.Context, detector *Detector, alerter *Alerter, mar
 				return
 			}
 
-			for _, alert := range alerts {
-				alerter.EmitAlert(alert)
-			}
-
 			if len(alerts) > 0 {
 				mu.Lock()
-				totalAlerts += len(alerts)
+				allAlerts = append(allAlerts, alerts...)
 				mu.Unlock()
 			}
 		}(m)
@@ -232,9 +353,41 @@ func runPollCycle(ctx context.Context, detector *Detector, alerter *Alerter, mar
 
 	wg.Wait()
 
+	// Sort alerts by trade execution timestamp in descending order (latest to oldest)
+	sort.Slice(allAlerts, func(i, j int) bool {
+		return allAlerts[i].Trade.Timestamp > allAlerts[j].Trade.Timestamp
+	})
+
+	// Emit all sorted alerts
+	for _, alert := range allAlerts {
+		alerter.EmitAlert(alert)
+	}
+
 	// Don't emit summary if we're shutting down — it would be misleading.
 	if ctx.Err() == nil {
-		alerter.EmitSummary(len(markets), totalAlerts)
+		alerter.EmitSummary(len(markets), len(allAlerts))
+	}
+}
+
+// runWalletPollCycle polls the detector for a single wallet's new trades,
+// sorts them descending by timestamp, and emits them.
+func runWalletPollCycle(ctx context.Context, detector *Detector, alerter *Alerter, walletID string) {
+	alerts, err := detector.CheckWallet(ctx, walletID)
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		slog.Warn("wallet check failed", "wallet", walletID, "error", err)
+		return
+	}
+
+	// Sort alerts descending by timestamp (latest to oldest)
+	sort.Slice(alerts, func(i, j int) bool {
+		return alerts[i].Trade.Timestamp > alerts[j].Trade.Timestamp
+	})
+
+	for _, alert := range alerts {
+		alerter.EmitAlert(alert)
 	}
 }
 
@@ -299,7 +452,7 @@ func cleanOldLogs(logDir string, maxLogs int) error {
 
 // setupLogging configures human-readable logging on stderr and creates the
 // session log file under logs/.
-func setupLogging() (*os.File, error) {
+func setupLogging(cmdFlag string) (*os.File, error) {
 	logDir := "logs"
 	maxLogs := 20
 
@@ -310,7 +463,7 @@ func setupLogging() (*os.File, error) {
 
 	// 2. Generate new log filename based on session start time
 	sessionTime := time.Now().Format("2006-01-02_15-04-05")
-	logFileName := fmt.Sprintf("session_%s.log", sessionTime)
+	logFileName := fmt.Sprintf("session_%s_%s.log", cmdFlag, sessionTime)
 	logFilePath := filepath.Join(logDir, logFileName)
 
 	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)

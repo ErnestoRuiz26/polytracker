@@ -13,10 +13,18 @@ Polytracker is a zero-dependency Go service that polls Polymarket's public APIs,
 git clone https://github.com/nesto/polytracker.git
 cd polytracker
 go build -o polytracker .
-./polytracker
+
+# Show help instructions
+./polytracker help
+
+# Track all active markets for whale trades (default mode)
+./polytracker track
+
+# Track trade history and new trades for a specific wallet
+./polytracker track --wallet=0xd81fbc5c53593e4e2923a641ff2bc7e2d9866b75
 ```
 
-That's it. No API keys, no external dependencies. The service reads `settings.json` in the working directory and starts monitoring active Polymarket markets.
+When tracking a specific wallet, the tool retrieves and paginates historical trades 10 at a time (sorted latest to oldest). Pressing `[Enter]` transitions to real-time tracking, polling every `poll_interval`. Log files are saved under `logs/` with names following `session_command_flag_DATE_TIME.log`.
 
 ---
 

@@ -195,6 +195,42 @@ func (c *Client) FetchOrderBook(ctx context.Context, tokenID string) (*OrderBook
 	return &book, nil
 }
 
+// FetchUserTrades retrieves recent trades for a specific user (wallet address).
+func (c *Client) FetchUserTrades(ctx context.Context, walletAddress string, limit, offset int) ([]Trade, error) {
+	params := url.Values{
+		"user":   {walletAddress},
+		"limit":  {strconv.Itoa(limit)},
+		"offset": {strconv.Itoa(offset)},
+	}
+	endpoint := fmt.Sprintf("%s/trades?%s", c.dataURL, params.Encode())
+
+	var trades []Trade
+	if err := c.getJSON(ctx, endpoint, &trades); err != nil {
+		return nil, fmt.Errorf("fetch trades for user %s: %w", walletAddress[:min(len(walletAddress), 10)], err)
+	}
+	return trades, nil
+}
+
+// FetchMarketByConditionID retrieves a single market from Gamma API by its condition ID.
+func (c *Client) FetchMarketByConditionID(ctx context.Context, conditionID string) (*Market, error) {
+	params := url.Values{
+		"conditionId": {conditionID},
+	}
+	endpoint := fmt.Sprintf("%s/markets?%s", c.gammaURL, params.Encode())
+
+	var markets []Market
+	if err := c.getJSON(ctx, endpoint, &markets); err != nil {
+		return nil, fmt.Errorf("fetch market by condition ID %s: %w", conditionID[:min(len(conditionID), 10)], err)
+	}
+
+	if len(markets) == 0 {
+		return nil, fmt.Errorf("market not found for condition ID %s", conditionID)
+	}
+
+	markets[0].ParseTokenIDs()
+	return &markets[0], nil
+}
+
 // ---------------------------------------------------------------------------
 // HTTP helper with retry
 // ---------------------------------------------------------------------------

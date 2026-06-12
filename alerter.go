@@ -54,6 +54,7 @@ func (a *Alerter) EmitAlert(alert WhaleTrade) {
 	fmt.Printf("USD Value of position: $%.2f\n", alert.Trade.USDValue)
 	fmt.Printf("Market Name:           %s\n", alert.Market.Question)
 	fmt.Printf("Placed At:             %s\n", placedTime)
+	fmt.Printf("Wallet:                %s\n", alert.Trade.Wallet)
 	fmt.Printf("Side:                  %s\n", alert.Trade.Side)
 	fmt.Printf("Predicted outcome:     %s\n", alert.Trade.Outcome)
 	fmt.Printf("Market Link:           %s\n", alert.Market.MarketURL)

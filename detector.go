@@ -243,3 +243,91 @@ func findHolder(groups []HolderGroup, wallet string) (rank int, amount float64, 
 	}
 	return 0, 0, false
 }
+
+// EnrichTradesDirect fetches market metadata and Open Interest, constructs the WhaleTrade objects,
+// and performs full CLOB/holder enrichment.
+func (d *Detector) EnrichTradesDirect(ctx context.Context, trades []Trade) ([]WhaleTrade, error) {
+	var alerts []WhaleTrade
+	for _, t := range trades {
+		if t.ConditionID == "" {
+			continue
+		}
+
+		// 1. Fetch market metadata.
+		m, err := d.client.FetchMarketByConditionID(ctx, t.ConditionID)
+		if err != nil {
+			slog.Warn("skipping enrichment: failed to fetch market metadata", "conditionID", t.ConditionID, "error", err)
+			// Construct a basic fallback market
+			m = &Market{
+				ConditionID: t.ConditionID,
+				Question:    t.Title,
+				Slug:        t.Slug,
+			}
+			if m.Question == "" {
+				m.Question = "Polymarket Bet"
+			}
+			if m.Slug == "" {
+				m.Slug = "polymarket-bet"
+			}
+		}
+
+		// 2. Fetch Open Interest.
+		oi, err := d.client.FetchOpenInterest(ctx, t.ConditionID)
+		if err != nil {
+			slog.Debug("failed to fetch OI, using fallback of 1", "conditionID", t.ConditionID, "error", err)
+			oi = 1.0 // fallback so we don't divide by zero
+		}
+
+		// 3. Build base alert and enrich it.
+		alert, err := d.enrichTrade(ctx, *m, t, oi)
+		if err != nil {
+			slog.Warn("enrichment failed, using partial alert", "error", err)
+			alert = d.buildBaseAlert(*m, t, oi)
+		}
+		alerts = append(alerts, alert)
+	}
+	return alerts, nil
+}
+
+// CheckWallet inspects recent trades for a user wallet and returns
+// new trades since the last check, enriched with context.
+func (d *Detector) CheckWallet(ctx context.Context, walletAddress string) ([]WhaleTrade, error) {
+	// Fetch recent user trades (limit 50, offset 0).
+	trades, err := d.client.FetchUserTrades(ctx, walletAddress, 50, 0)
+	if err != nil {
+		return nil, fmt.Errorf("user trades: %w", err)
+	}
+	if len(trades) == 0 {
+		return nil, nil
+	}
+
+	// Filter to only trades newer than our last checkpoint.
+	d.mu.Lock()
+	lastSeen := d.seen[walletAddress]
+	d.mu.Unlock()
+
+	var newTrades []Trade
+	var maxTS int64
+	for _, t := range trades {
+		if t.Timestamp > lastSeen {
+			newTrades = append(newTrades, t)
+		}
+		if t.Timestamp > maxTS {
+			maxTS = t.Timestamp
+		}
+	}
+
+	// Update checkpoint to avoid reprocessing.
+	if maxTS > lastSeen {
+		d.mu.Lock()
+		d.seen[walletAddress] = maxTS
+		d.mu.Unlock()
+	}
+
+	if len(newTrades) == 0 {
+		return nil, nil
+	}
+
+	// Enrich the new trades.
+	return d.EnrichTradesDirect(ctx, newTrades)
+}
