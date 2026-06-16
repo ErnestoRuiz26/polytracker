@@ -38,6 +38,39 @@ func (m *Market) ParseTokenIDs() {
 	_ = json.Unmarshal([]byte(m.ClobTokenIdsRaw), &m.TokenIDs)
 }
 
+// ClobMarket represents a market response from CLOB API's GET /markets/{condition_id}.
+type ClobMarket struct {
+	ConditionID     string            `json:"condition_id"`
+	Question        string            `json:"question"`
+	MarketSlug      string            `json:"market_slug"`
+	Active          bool              `json:"active"`
+	Closed          bool              `json:"closed"`
+	EnableOrderBook bool              `json:"enable_order_book"`
+	Tokens          []ClobMarketToken `json:"tokens"`
+}
+
+type ClobMarketToken struct {
+	TokenID string `json:"token_id"`
+	Outcome string `json:"outcome"`
+}
+
+// ToMarket converts a ClobMarket to the standard Market model.
+func (cm *ClobMarket) ToMarket() *Market {
+	tokenIDs := make([]string, len(cm.Tokens))
+	for i, t := range cm.Tokens {
+		tokenIDs[i] = t.TokenID
+	}
+	return &Market{
+		ConditionID:     cm.ConditionID,
+		Question:        cm.Question,
+		Slug:            cm.MarketSlug,
+		Active:          cm.Active,
+		Closed:          cm.Closed,
+		EnableOrderBook: cm.EnableOrderBook,
+		TokenIDs:        tokenIDs,
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Data API: Trades
 // ---------------------------------------------------------------------------

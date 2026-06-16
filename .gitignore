@@ -1,3 +1,5 @@
 settings.*
 logs/
-polytracker
+
+# LLM related files
+CLAUDE.*

@@ -211,24 +211,16 @@ func (c *Client) FetchUserTrades(ctx context.Context, walletAddress string, limi
 	return trades, nil
 }
 
-// FetchMarketByConditionID retrieves a single market from Gamma API by its condition ID.
+// FetchMarketByConditionID retrieves a single market from the CLOB API by its condition ID.
 func (c *Client) FetchMarketByConditionID(ctx context.Context, conditionID string) (*Market, error) {
-	params := url.Values{
-		"conditionId": {conditionID},
-	}
-	endpoint := fmt.Sprintf("%s/markets?%s", c.gammaURL, params.Encode())
+	endpoint := fmt.Sprintf("%s/markets/%s", c.clobURL, conditionID)
 
-	var markets []Market
-	if err := c.getJSON(ctx, endpoint, &markets); err != nil {
-		return nil, fmt.Errorf("fetch market by condition ID %s: %w", conditionID[:min(len(conditionID), 10)], err)
+	var cm ClobMarket
+	if err := c.getJSON(ctx, endpoint, &cm); err != nil {
+		return nil, fmt.Errorf("fetch clob market by condition ID %s: %w", conditionID[:min(len(conditionID), 10)], err)
 	}
 
-	if len(markets) == 0 {
-		return nil, fmt.Errorf("market not found for condition ID %s", conditionID)
-	}
-
-	markets[0].ParseTokenIDs()
-	return &markets[0], nil
+	return cm.ToMarket(), nil
 }
 
 // ---------------------------------------------------------------------------
