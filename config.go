@@ -127,64 +127,56 @@ func defaults() *Config {
 }
 
 // applyEnvOverrides lets env vars selectively override individual fields.
-// Only fields with a corresponding env var set are touched.
+// Only fields with a corresponding env var set (and parseable) are touched.
 func applyEnvOverrides(cfg *Config) {
-	if v := os.Getenv("PT_ALERT_THRESHOLD"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			cfg.AlertThreshold = f
-		}
-	}
-	if v := os.Getenv("PT_POLL_INTERVAL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.PollInterval = Duration{d}
-		}
-	}
-	if v := os.Getenv("PT_MARKET_REFRESH"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.MarketRefreshInterval = Duration{d}
-		}
-	}
-	if v := os.Getenv("PT_MAX_CONCURRENCY"); v != "" {
-		if i, err := strconv.Atoi(v); err == nil {
-			cfg.MaxConcurrency = i
-		}
-	}
-	if v := os.Getenv("PT_MIN_OI"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			cfg.MinOpenInterest = f
-		}
-	}
-	if v := os.Getenv("PT_MAX_OI"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			cfg.MaxOpenInterest = f
-		}
-	}
-	if v := os.Getenv("PT_MAX_MARKETS"); v != "" {
-		if i, err := strconv.Atoi(v); err == nil {
-			cfg.MaxMarketsPerCycle = i
-		}
-	}
-	if v := os.Getenv("PT_GAMMA_URL"); v != "" {
-		cfg.GammaBaseURL = v
-	}
-	if v := os.Getenv("PT_DATA_URL"); v != "" {
-		cfg.DataBaseURL = v
-	}
-	if v := os.Getenv("PT_CLOB_URL"); v != "" {
-		cfg.CLOBBaseURL = v
-	}
-	if v := os.Getenv("PT_RATE_LIMIT_RPS"); v != "" {
-		if i, err := strconv.Atoi(v); err == nil {
-			cfg.RateLimitRPS = i
-		}
-	}
+	envFloat("PT_ALERT_THRESHOLD", &cfg.AlertThreshold)
+	envDuration("PT_POLL_INTERVAL", &cfg.PollInterval)
+	envDuration("PT_MARKET_REFRESH", &cfg.MarketRefreshInterval)
+	envInt("PT_MAX_CONCURRENCY", &cfg.MaxConcurrency)
+	envFloat("PT_MIN_OI", &cfg.MinOpenInterest)
+	envFloat("PT_MAX_OI", &cfg.MaxOpenInterest)
+	envInt("PT_MAX_MARKETS", &cfg.MaxMarketsPerCycle)
+	envStrInto("PT_GAMMA_URL", &cfg.GammaBaseURL)
+	envStrInto("PT_DATA_URL", &cfg.DataBaseURL)
+	envStrInto("PT_CLOB_URL", &cfg.CLOBBaseURL)
+	envInt("PT_RATE_LIMIT_RPS", &cfg.RateLimitRPS)
 }
 
-// --- env helper (only used for the settings file path itself) ---
+// --- env helpers: each assigns to *dst only when the var is set and parses ---
 
 func envStr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
 	return fallback
+}
+
+func envStrInto(key string, dst *string) {
+	if v := os.Getenv(key); v != "" {
+		*dst = v
+	}
+}
+
+func envInt(key string, dst *int) {
+	if v := os.Getenv(key); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			*dst = i
+		}
+	}
+}
+
+func envFloat(key string, dst *float64) {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			*dst = f
+		}
+	}
+}
+
+func envDuration(key string, dst *Duration) {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			*dst = Duration{d}
+		}
+	}
 }

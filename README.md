@@ -100,15 +100,16 @@ PT_ALERT_THRESHOLD=0.03 PT_MIN_OI=5000 ./polytracker
 ## How It Works
 
 ```
-Every 60s per market:
+Every 5m: refresh active market list and capture each market's open interest (Data API)
+
+Every 60s per market (reusing the OI from the last refresh):
   ┌─ Fetch recent trades (Data API)
-  ├─ Fetch open interest (Data API)
-  ├─ For each trade: is trade_USD / OI ≥ threshold?
+  ├─ For each new trade: is trade_USD / OI ≥ threshold?
   │   └─ YES → Enrich with:
   │       ├─ Current midpoint price (CLOB API)
   │       ├─ Order book depth — top 5 bid/ask levels (CLOB API)
   │       └─ Top holder check — is this wallet already a major holder? (Data API)
-  └─ Emit structured JSON alert to stdout
+  └─ Write structured JSON alert to the session log file + readable summary to stdout
 ```
 
 **Key behaviors:**
@@ -121,7 +122,7 @@ Every 60s per market:
 
 ## Alert Format
 
-Alerts are written to **stdout** as single-line JSON (one per trade). Operational logs go to **stderr**.
+Each whale trade is recorded two ways: a single-line structured JSON object (one per trade) is written to the **session log file** under `logs/`, and a plain-English summary is printed to **stdout**. Operational logs go to **stderr**. The JSON below is the shape written to the log file.
 
 ```json
 {
@@ -159,17 +160,23 @@ Alerts are written to **stdout** as single-line JSON (one per trade). Operationa
 }
 ```
 
-### Piping and Filtering
+### Filtering the JSON alerts
+
+Structured alerts land in the session log file under `logs/` as one slog JSON
+line per trade, with the full alert nested under `full_alert`. Extract and
+filter them with `jq`:
 
 ```bash
-# Save alerts to a file, keep operational logs on screen
-./polytracker > alerts.jsonl
+# Pull the nested alert payloads out of the newest session log
+jq -c 'select(.msg == "WHALE_TRADE_DETECTED") | .full_alert' logs/session_*.log
 
 # Filter for trades above $50K
-./polytracker | jq 'select(.trade.usdValue > 50000)'
+jq -c 'select(.msg == "WHALE_TRADE_DETECTED") | .full_alert
+       | select(.trade.usdValue > 50000)' logs/session_*.log
 
 # Watch for repeat accumulation (wallet is already a top holder)
-./polytracker | jq 'select(.context.walletIsTopHolder == true)'
+jq -c 'select(.msg == "WHALE_TRADE_DETECTED") | .full_alert
+       | select(.context.walletIsTopHolder == true)' logs/session_*.log
 ```
 
 ---

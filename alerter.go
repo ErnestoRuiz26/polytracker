@@ -27,10 +27,15 @@ func NewAlerter(w io.Writer) *Alerter {
 	}
 }
 
-// EmitAlert writes a single whale trade alert as a JSON object to stdout.
-// The entire WhaleTrade struct is serialized as the "alert_data" field
-// within the slog JSON envelope.
+// EmitAlert records a whale trade: the full structured JSON goes to the
+// session log file, and a human-readable summary is printed to stdout.
 func (a *Alerter) EmitAlert(alert WhaleTrade) {
+	a.logJSON(alert)
+	printSummary(alert)
+}
+
+// logJSON writes the full alert struct as a single JSON line to the log file.
+func (a *Alerter) logJSON(alert WhaleTrade) {
 	// Marshal the full alert struct so it nests cleanly in the slog output.
 	raw, err := json.Marshal(alert)
 	if err != nil {
@@ -38,8 +43,7 @@ func (a *Alerter) EmitAlert(alert WhaleTrade) {
 		return
 	}
 
-	// Emit as a raw JSON message so consumers get the full structure.
-	// Using RawMessage avoids double-encoding.
+	// Using RawMessage avoids double-encoding the nested payload.
 	a.logger.Info("WHALE_TRADE_DETECTED",
 		"market", alert.Market.Question,
 		"usd_value", alert.Trade.USDValue,
@@ -47,8 +51,10 @@ func (a *Alerter) EmitAlert(alert WhaleTrade) {
 		"wallet", alert.Trade.Wallet,
 		"full_alert", json.RawMessage(raw),
 	)
+}
 
-	// Output readable summary in simple English to the terminal
+// printSummary prints a readable, plain-English summary of an alert to stdout.
+func printSummary(alert WhaleTrade) {
 	placedTime := time.Unix(alert.Trade.Timestamp, 0).UTC().Format("2006-01-02 15:04:05 MST")
 	fmt.Printf("__________________________________________________\n")
 	fmt.Printf("USD Value of position: $%.2f\n", alert.Trade.USDValue)

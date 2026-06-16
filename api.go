@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -22,7 +23,22 @@ const (
 	maxRetries     = 3
 	baseRetryDelay = 500 * time.Millisecond
 	userAgent      = "polytracker/1.0"
+	shortIDLen     = 16
 )
+
+// errNonRetryable wraps responses that should fail immediately (4xx) rather
+// than being retried, so getJSON's retry loop can branch on classification
+// instead of re-inspecting status codes.
+var errNonRetryable = errors.New("non-retryable response")
+
+// shortID truncates an identifier for log/error messages without risking an
+// out-of-range slice on short or malformed IDs.
+func shortID(s string) string {
+	if len(s) <= shortIDLen {
+		return s
+	}
+	return s[:shortIDLen]
+}
 
 // Client wraps an HTTP client with Polymarket API base URLs and a rate limiter.
 type Client struct {
@@ -30,15 +46,18 @@ type Client struct {
 	gammaURL string
 	dataURL  string
 	clobURL  string
+	ticker   *time.Ticker
 	limiter  <-chan time.Time
 }
 
 // NewClient creates a Client from the provided config.
 func NewClient(cfg *Config) *Client {
+	var ticker *time.Ticker
 	var limiter <-chan time.Time
 	if cfg.RateLimitRPS > 0 {
 		interval := time.Second / time.Duration(cfg.RateLimitRPS)
-		limiter = time.Tick(interval)
+		ticker = time.NewTicker(interval)
+		limiter = ticker.C
 	}
 
 	return &Client{
@@ -52,7 +71,15 @@ func NewClient(cfg *Config) *Client {
 		gammaURL: cfg.GammaBaseURL,
 		dataURL:  cfg.DataBaseURL,
 		clobURL:  cfg.CLOBBaseURL,
+		ticker:   ticker,
 		limiter:  limiter,
+	}
+}
+
+// Close releases the rate-limiter ticker. Safe to call when no limiter is set.
+func (c *Client) Close() {
+	if c.ticker != nil {
+		c.ticker.Stop()
 	}
 }
 
@@ -116,7 +143,7 @@ func (c *Client) FetchTrades(ctx context.Context, conditionID string, limit int)
 
 	var trades []Trade
 	if err := c.getJSON(ctx, endpoint, &trades); err != nil {
-		return nil, fmt.Errorf("fetch trades for %s: %w", conditionID[:16], err)
+		return nil, fmt.Errorf("fetch trades for %s: %w", shortID(conditionID), err)
 	}
 	return trades, nil
 }
@@ -131,7 +158,7 @@ func (c *Client) FetchOpenInterest(ctx context.Context, conditionID string) (flo
 
 	var results []OpenInterest
 	if err := c.getJSON(ctx, endpoint, &results); err != nil {
-		return 0, fmt.Errorf("fetch OI for %s: %w", conditionID[:16], err)
+		return 0, fmt.Errorf("fetch OI for %s: %w", shortID(conditionID), err)
 	}
 
 	if len(results) == 0 {
@@ -153,7 +180,7 @@ func (c *Client) FetchHolders(ctx context.Context, conditionID string, limit int
 
 	var groups []HolderGroup
 	if err := c.getJSON(ctx, endpoint, &groups); err != nil {
-		return nil, fmt.Errorf("fetch holders for %s: %w", conditionID[:16], err)
+		return nil, fmt.Errorf("fetch holders for %s: %w", shortID(conditionID), err)
 	}
 	return groups, nil
 }
@@ -206,7 +233,7 @@ func (c *Client) FetchUserTrades(ctx context.Context, walletAddress string, limi
 
 	var trades []Trade
 	if err := c.getJSON(ctx, endpoint, &trades); err != nil {
-		return nil, fmt.Errorf("fetch trades for user %s: %w", walletAddress[:min(len(walletAddress), 10)], err)
+		return nil, fmt.Errorf("fetch trades for user %s: %w", shortID(walletAddress), err)
 	}
 	return trades, nil
 }
@@ -217,7 +244,7 @@ func (c *Client) FetchMarketByConditionID(ctx context.Context, conditionID strin
 
 	var cm ClobMarket
 	if err := c.getJSON(ctx, endpoint, &cm); err != nil {
-		return nil, fmt.Errorf("fetch clob market by condition ID %s: %w", conditionID[:min(len(conditionID), 10)], err)
+		return nil, fmt.Errorf("fetch clob market by condition ID %s: %w", shortID(conditionID), err)
 	}
 
 	return cm.ToMarket(), nil
@@ -228,8 +255,10 @@ func (c *Client) FetchMarketByConditionID(ctx context.Context, conditionID strin
 // ---------------------------------------------------------------------------
 
 // getJSON performs a GET request, decodes the JSON response into dest,
-// and retries transient failures with exponential backoff.
-func (c *Client) getJSON(ctx context.Context, rawURL string, dest interface{}) error {
+// and retries transient failures with exponential backoff. Non-retryable
+// outcomes (4xx, decode errors) are wrapped with errNonRetryable and returned
+// immediately.
+func (c *Client) getJSON(ctx context.Context, rawURL string, dest any) error {
 	var lastErr error
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -252,41 +281,56 @@ func (c *Client) getJSON(ctx context.Context, rawURL string, dest interface{}) e
 			}
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-		if err != nil {
-			return fmt.Errorf("build request: %w", err)
+		err := c.doRequest(ctx, rawURL, dest)
+		if err == nil {
+			return nil
 		}
-		req.Header.Set("User-Agent", userAgent)
-		req.Header.Set("Accept", "application/json")
-
-		resp, err := c.http.Do(req)
-		if err != nil {
-			lastErr = fmt.Errorf("http do: %w", err)
-			continue
+		// Stop immediately on non-retryable responses and cancellation.
+		if errors.Is(err, errNonRetryable) || ctx.Err() != nil {
+			return err
 		}
-
-		body, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if readErr != nil {
-			lastErr = fmt.Errorf("read body: %w", readErr)
-			continue
-		}
-
-		// Retry on server errors and rate limits.
-		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-			lastErr = fmt.Errorf("HTTP %d from %s", resp.StatusCode, rawURL)
-			continue
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("HTTP %d from %s: %s", resp.StatusCode, rawURL, string(body[:min(len(body), 200)]))
-		}
-
-		if err := json.Unmarshal(body, dest); err != nil {
-			return fmt.Errorf("decode JSON from %s: %w", rawURL, err)
-		}
-		return nil
+		lastErr = err
 	}
 
 	return fmt.Errorf("exhausted retries for %s: %w", rawURL, lastErr)
+}
+
+// doRequest performs a single GET attempt with its own per-request timeout
+// and decodes a 200 response into dest.
+func (c *Client) doRequest(ctx context.Context, rawURL string, dest any) error {
+	reqCtx, cancel := context.WithTimeout(ctx, httpTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("http do: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read body: %w", err)
+	}
+
+	// Retry on server errors and rate limits.
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		return fmt.Errorf("HTTP %d from %s", resp.StatusCode, rawURL)
+	}
+	// Other non-200s are client errors — fail fast.
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d from %s: %s: %w",
+			resp.StatusCode, rawURL, string(body[:min(len(body), 200)]), errNonRetryable)
+	}
+
+	if err := json.Unmarshal(body, dest); err != nil {
+		return fmt.Errorf("decode JSON from %s: %w: %w", rawURL, err, errNonRetryable)
+	}
+	return nil
 }

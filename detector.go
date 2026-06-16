@@ -14,33 +14,68 @@ import (
 	"time"
 )
 
+const (
+	// recentTradesLimit is how many recent trades to pull per market/wallet poll.
+	recentTradesLimit = 50
+	// topHoldersLimit is how many holders to inspect when ranking a wallet.
+	topHoldersLimit = 20
+)
+
 // Detector evaluates trades against OI thresholds and enriches flagged trades.
 type Detector struct {
 	client *Client
 	config *Config
 
-	// seen tracks the most recent trade timestamp we've processed per market.
-	// Key: conditionID, Value: unix timestamp of newest trade seen.
-	mu   sync.Mutex
-	seen map[string]int64
+	// seenMarket / seenWallet track the most recent trade timestamp processed,
+	// keyed by conditionID and wallet address respectively. Kept in separate
+	// maps so the two keyspaces can never collide.
+	mu         sync.Mutex
+	seenMarket map[string]int64
+	seenWallet map[string]int64
 }
 
-// NewDetector creates a Detector with an empty seen-trade cache.
+// NewDetector creates a Detector with empty seen-trade caches.
 func NewDetector(client *Client, cfg *Config) *Detector {
 	return &Detector{
-		client: client,
-		config: cfg,
-		seen:   make(map[string]int64),
+		client:     client,
+		config:     cfg,
+		seenMarket: make(map[string]int64),
+		seenWallet: make(map[string]int64),
 	}
+}
+
+// newTradesSince returns the trades newer than the given checkpoint timestamp
+// along with the newest timestamp observed across all supplied trades. It does
+// not mutate any state — callers advance the checkpoint only after the trades
+// are successfully processed.
+func newTradesSince(trades []Trade, lastSeen int64) (newer []Trade, maxTS int64) {
+	for _, t := range trades {
+		if t.Timestamp > lastSeen {
+			newer = append(newer, t)
+		}
+		if t.Timestamp > maxTS {
+			maxTS = t.Timestamp
+		}
+	}
+	return newer, maxTS
 }
 
 // CheckMarket inspects recent trades for a single market and returns
 // any that exceed the OI threshold, enriched with book/holder context.
-func (d *Detector) CheckMarket(ctx context.Context, market Market) ([]WhaleTrade, error) {
+// The open interest captured at market-refresh time is reused here rather
+// than re-fetched every cycle.
+func (d *Detector) CheckMarket(ctx context.Context, tm TrackedMarket) ([]WhaleTrade, error) {
+	market := tm.Market
 	condID := market.ConditionID
+	oi := tm.OI
+
+	if oi <= 0 {
+		slog.Debug("skipping market with zero OI", "conditionId", shortID(condID))
+		return nil, nil
+	}
 
 	// 1. Fetch recent trades.
-	trades, err := d.client.FetchTrades(ctx, condID, 50)
+	trades, err := d.client.FetchTrades(ctx, condID, recentTradesLimit)
 	if err != nil {
 		return nil, fmt.Errorf("trades: %w", err)
 	}
@@ -50,24 +85,17 @@ func (d *Detector) CheckMarket(ctx context.Context, market Market) ([]WhaleTrade
 
 	// Filter to only trades newer than our last checkpoint.
 	d.mu.Lock()
-	lastSeen := d.seen[condID]
+	lastSeen := d.seenMarket[condID]
 	d.mu.Unlock()
 
-	var newTrades []Trade
-	var maxTS int64
-	for _, t := range trades {
-		if t.Timestamp > lastSeen {
-			newTrades = append(newTrades, t)
-		}
-		if t.Timestamp > maxTS {
-			maxTS = t.Timestamp
-		}
-	}
+	newTrades, maxTS := newTradesSince(trades, lastSeen)
 
-	// Update checkpoint even if no whales found — avoids reprocessing.
+	// Advance checkpoint only after we've decided we can fully process this
+	// market (trades fetched, OI known). Doing it here — rather than before the
+	// OI fetch — means a transient failure leaves trades for the next cycle.
 	if maxTS > lastSeen {
 		d.mu.Lock()
-		d.seen[condID] = maxTS
+		d.seenMarket[condID] = maxTS
 		d.mu.Unlock()
 	}
 
@@ -75,17 +103,7 @@ func (d *Detector) CheckMarket(ctx context.Context, market Market) ([]WhaleTrade
 		return nil, nil
 	}
 
-	// 2. Fetch open interest for this market.
-	oi, err := d.client.FetchOpenInterest(ctx, condID)
-	if err != nil {
-		return nil, fmt.Errorf("OI: %w", err)
-	}
-	if oi <= 0 {
-		slog.Debug("skipping market with zero OI", "conditionId", condID[:16])
-		return nil, nil
-	}
-
-	// 3. Check each new trade against the threshold.
+	// 2. Check each new trade against the threshold.
 	var flagged []Trade
 	for _, t := range newTrades {
 		ratio := t.USDValue() / oi
@@ -104,14 +122,14 @@ func (d *Detector) CheckMarket(ctx context.Context, market Market) ([]WhaleTrade
 		"oi", oi,
 	)
 
-	// 4. Enrich each flagged trade with midpoint, book depth, holder status.
+	// 3. Enrich each flagged trade with midpoint, book depth, holder status.
 	var alerts []WhaleTrade
 	for _, t := range flagged {
 		alert, err := d.enrichTrade(ctx, market, t, oi)
 		if err != nil {
 			// Log but don't abort — partial enrichment is better than none.
 			slog.Warn("enrichment failed, emitting partial alert",
-				"market", condID[:16],
+				"market", shortID(condID),
 				"error", err,
 			)
 			alert = d.buildBaseAlert(market, t, oi)
@@ -153,7 +171,7 @@ func (d *Detector) enrichTrade(ctx context.Context, market Market, trade Trade, 
 	}
 
 	// Check if the wallet is a top holder (best-effort).
-	if groups, err := d.client.FetchHolders(ctx, market.ConditionID, 20); err == nil {
+	if groups, err := d.client.FetchHolders(ctx, market.ConditionID, topHoldersLimit); err == nil {
 		rank, amount, found := findHolder(groups, trade.ProxyWallet)
 		alert.Context.WalletIsTopHolder = found
 		if found {
@@ -289,11 +307,21 @@ func (d *Detector) EnrichTradesDirect(ctx context.Context, trades []Trade) ([]Wh
 	return alerts, nil
 }
 
+// SetWalletCheckpoint seeds the last-seen timestamp for a wallet so that
+// historical trades already shown are not re-emitted when real-time tracking
+// begins.
+func (d *Detector) SetWalletCheckpoint(walletAddress string, ts int64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if ts > d.seenWallet[walletAddress] {
+		d.seenWallet[walletAddress] = ts
+	}
+}
+
 // CheckWallet inspects recent trades for a user wallet and returns
 // new trades since the last check, enriched with context.
 func (d *Detector) CheckWallet(ctx context.Context, walletAddress string) ([]WhaleTrade, error) {
-	// Fetch recent user trades (limit 50, offset 0).
-	trades, err := d.client.FetchUserTrades(ctx, walletAddress, 50, 0)
+	trades, err := d.client.FetchUserTrades(ctx, walletAddress, recentTradesLimit, 0)
 	if err != nil {
 		return nil, fmt.Errorf("user trades: %w", err)
 	}
@@ -303,24 +331,14 @@ func (d *Detector) CheckWallet(ctx context.Context, walletAddress string) ([]Wha
 
 	// Filter to only trades newer than our last checkpoint.
 	d.mu.Lock()
-	lastSeen := d.seen[walletAddress]
+	lastSeen := d.seenWallet[walletAddress]
 	d.mu.Unlock()
 
-	var newTrades []Trade
-	var maxTS int64
-	for _, t := range trades {
-		if t.Timestamp > lastSeen {
-			newTrades = append(newTrades, t)
-		}
-		if t.Timestamp > maxTS {
-			maxTS = t.Timestamp
-		}
-	}
+	newTrades, maxTS := newTradesSince(trades, lastSeen)
 
-	// Update checkpoint to avoid reprocessing.
 	if maxTS > lastSeen {
 		d.mu.Lock()
-		d.seen[walletAddress] = maxTS
+		d.seenWallet[walletAddress] = maxTS
 		d.mu.Unlock()
 	}
 

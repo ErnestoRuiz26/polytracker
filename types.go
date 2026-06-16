@@ -13,12 +13,12 @@ import "encoding/json"
 // The ClobTokenIds field is a JSON-encoded string array in the API response
 // (e.g. "[\"abc123\",\"def456\"]"), so we unmarshal it manually.
 type Market struct {
-	ConditionID    string `json:"conditionId"`
-	Question       string `json:"question"`
-	Slug           string `json:"slug"`
-	Active         bool   `json:"active"`
-	Closed         bool   `json:"closed"`
-	EnableOrderBook bool  `json:"enableOrderBook"`
+	ConditionID     string `json:"conditionId"`
+	Question        string `json:"question"`
+	Slug            string `json:"slug"`
+	Active          bool   `json:"active"`
+	Closed          bool   `json:"closed"`
+	EnableOrderBook bool   `json:"enableOrderBook"`
 
 	// Raw JSON string from the API; parsed into TokenIDs below.
 	ClobTokenIdsRaw string `json:"clobTokenIds"`
@@ -26,6 +26,15 @@ type Market struct {
 	// Parsed token IDs for the YES/NO outcome tokens.
 	// Populated by ParseTokenIDs() after unmarshaling.
 	TokenIDs []string `json:"-"`
+}
+
+// TrackedMarket pairs a market with the open interest captured at refresh
+// time. The poll cycle reuses this OI instead of re-fetching it every cycle,
+// so OI is at most one market-refresh-interval stale — acceptable for the
+// trade/OI ratio threshold.
+type TrackedMarket struct {
+	Market Market
+	OI     float64
 }
 
 // ParseTokenIDs decodes the ClobTokenIdsRaw JSON string into TokenIDs.
@@ -164,11 +173,11 @@ type OrderBook struct {
 // WhaleTrade is the enriched alert payload emitted when a trade exceeds
 // the OI threshold. Contains all context needed for the consumer to act.
 type WhaleTrade struct {
-	Alert     string         `json:"alert"`
-	Timestamp string         `json:"timestamp"`
-	Market    WhaleMarket    `json:"market"`
-	Trade     WhaleTradeLeg  `json:"trade"`
-	Context   WhaleContext   `json:"context"`
+	Alert     string        `json:"alert"`
+	Timestamp string        `json:"timestamp"`
+	Market    WhaleMarket   `json:"market"`
+	Trade     WhaleTradeLeg `json:"trade"`
+	Context   WhaleContext  `json:"context"`
 }
 
 type WhaleMarket struct {
@@ -190,11 +199,11 @@ type WhaleTradeLeg struct {
 }
 
 type WhaleContext struct {
-	OpenInterest     float64         `json:"openInterest"`
-	TradeToOIRatio   float64         `json:"tradeToOiRatio"`
-	ThresholdPct     float64         `json:"thresholdPct"`
-	CurrentMidpoint  float64         `json:"currentMidpoint"`
-	OrderBookDepth   *BookDepthInfo  `json:"orderBookDepth,omitempty"`
+	OpenInterest      float64        `json:"openInterest"`
+	TradeToOIRatio    float64        `json:"tradeToOiRatio"`
+	ThresholdPct      float64        `json:"thresholdPct"`
+	CurrentMidpoint   float64        `json:"currentMidpoint"`
+	OrderBookDepth    *BookDepthInfo `json:"orderBookDepth,omitempty"`
 	WalletIsTopHolder bool           `json:"walletIsTopHolder"`
 	WalletHolderRank  int            `json:"walletHolderRank,omitempty"`
 	WalletHolderAmt   float64        `json:"walletHolderAmount,omitempty"`
@@ -202,8 +211,8 @@ type WhaleContext struct {
 
 // BookDepthInfo summarizes the order book at alert time.
 type BookDepthInfo struct {
-	BestBid       string  `json:"bestBid"`
-	BestAsk       string  `json:"bestAsk"`
-	BidDepth5     float64 `json:"bidDepth5Levels"`
-	AskDepth5     float64 `json:"askDepth5Levels"`
+	BestBid   string  `json:"bestBid"`
+	BestAsk   string  `json:"bestAsk"`
+	BidDepth5 float64 `json:"bidDepth5Levels"`
+	AskDepth5 float64 `json:"askDepth5Levels"`
 }
