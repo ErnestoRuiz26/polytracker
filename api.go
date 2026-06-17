@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -310,6 +311,14 @@ func (c *Client) doRequest(ctx context.Context, rawURL string, dest any) error {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
+		// DNS resolution failures are permanent for this host — retrying with
+		// backoff just wastes time and floods logs during an outage. Classify
+		// them as non-retryable so getJSON fails fast. Connection refused /
+		// timeouts are left retryable (server may be restarting).
+		var dnsErr *net.DNSError
+		if errors.As(err, &dnsErr) {
+			return fmt.Errorf("http do: %w: %w", err, errNonRetryable)
+		}
 		return fmt.Errorf("http do: %w", err)
 	}
 	defer resp.Body.Close()

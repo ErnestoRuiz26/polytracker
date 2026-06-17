@@ -1,6 +1,102 @@
 package main
 
-import "testing"
+import (
+	"math"
+	"testing"
+	"time"
+)
+
+func TestPriceRoom(t *testing.T) {
+	tests := []struct {
+		price, want float64
+	}{
+		{0.65, 0.35},
+		{0.92, 0.08},
+		{0.0, 1.0},
+		{1.0, 0.0},
+		{1.2, 0.0},  // malformed > 1 clamps to 0
+		{-0.1, 1.0}, // malformed < 0 clamps to 1
+	}
+	for _, tt := range tests {
+		if got := priceRoom(tt.price); math.Abs(got-tt.want) > 1e-9 {
+			t.Errorf("priceRoom(%v) = %v, want %v", tt.price, got, tt.want)
+		}
+	}
+}
+
+func TestDaysUntil(t *testing.T) {
+	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	t.Run("zero end is unknown", func(t *testing.T) {
+		if got := daysUntil(time.Time{}, now); got != 0 {
+			t.Errorf("daysUntil(zero) = %v, want 0", got)
+		}
+	})
+	t.Run("ten days out", func(t *testing.T) {
+		end := now.Add(10 * 24 * time.Hour)
+		if got := daysUntil(end, now); got != 10 {
+			t.Errorf("daysUntil = %v, want 10", got)
+		}
+	})
+	t.Run("past resolution is negative", func(t *testing.T) {
+		end := now.Add(-2 * 24 * time.Hour)
+		if got := daysUntil(end, now); got != -2 {
+			t.Errorf("daysUntil = %v, want -2", got)
+		}
+	})
+}
+
+func TestPassesQuickFilters(t *testing.T) {
+	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	end30d := now.Add(30 * 24 * time.Hour)
+
+	tests := []struct {
+		name       string
+		cfg        *Config
+		usd, price float64
+		end        time.Time
+		want       bool
+	}{
+		{"all disabled passes", &Config{}, 1, 0.99, time.Time{}, true},
+		{"below USD floor drops", &Config{MinTradeUSD: 5000}, 4999, 0.5, end30d, false},
+		{"at USD floor passes", &Config{MinTradeUSD: 5000}, 5000, 0.5, end30d, true},
+		{"above price ceiling drops", &Config{MaxSignalPrice: 0.90}, 9999, 0.91, end30d, false},
+		{"at price ceiling passes", &Config{MaxSignalPrice: 0.90}, 9999, 0.90, end30d, true},
+		{"too soon to resolve drops", &Config{MinTimeToResolution: Duration{7 * 24 * time.Hour}}, 9999, 0.5, now.Add(24 * time.Hour), false},
+		{"far enough out passes", &Config{MinTimeToResolution: Duration{7 * 24 * time.Hour}}, 9999, 0.5, end30d, true},
+		{"unknown end skips time filter", &Config{MinTimeToResolution: Duration{7 * 24 * time.Hour}}, 9999, 0.5, time.Time{}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := passesQuickFilters(tt.cfg, tt.usd, tt.price, tt.end, now); got != tt.want {
+				t.Errorf("passesQuickFilters = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMarketEndTime(t *testing.T) {
+	tests := []struct {
+		name   string
+		raw    string
+		wantOK bool
+	}{
+		{"rfc3339", "2026-12-31T12:00:00Z", true},
+		{"date only", "2026-12-31", true},
+		{"empty is zero", "", false},
+		{"garbage is zero", "not-a-date", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := (&Market{EndDateRaw: tt.raw}).EndTime()
+			if tt.wantOK && got.IsZero() {
+				t.Errorf("EndTime(%q) = zero, want parsed", tt.raw)
+			}
+			if !tt.wantOK && !got.IsZero() {
+				t.Errorf("EndTime(%q) = %v, want zero", tt.raw, got)
+			}
+		})
+	}
+}
 
 func TestSumDepth(t *testing.T) {
 	levels := []OrderBookLevel{

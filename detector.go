@@ -60,6 +60,47 @@ func newTradesSince(trades []Trade, lastSeen int64) (newer []Trade, maxTS int64)
 	return newer, maxTS
 }
 
+// priceRoom returns how far a trade's price sits from certain resolution (1.0).
+// A 0.92 entry yields 0.08 of room; clamped to [0,1] for malformed prices.
+func priceRoom(price float64) float64 {
+	room := 1 - price
+	if room < 0 {
+		return 0
+	}
+	if room > 1 {
+		return 1
+	}
+	return room
+}
+
+// daysUntil returns the number of days from now until end. Returns 0 when end
+// is unknown (zero time); negative values mean the market is already past its
+// resolution date.
+func daysUntil(end, now time.Time) float64 {
+	if end.IsZero() {
+		return 0
+	}
+	return end.Sub(now).Hours() / 24
+}
+
+// passesQuickFilters applies the optional signal-quality hard ceilings. Each
+// filter is disabled when its config value is 0, so the default behaviour is
+// "annotate only, drop nothing".
+func passesQuickFilters(cfg *Config, usd, price float64, end, now time.Time) bool {
+	if cfg.MinTradeUSD > 0 && usd < cfg.MinTradeUSD {
+		return false
+	}
+	if cfg.MaxSignalPrice > 0 && price > cfg.MaxSignalPrice {
+		return false
+	}
+	if cfg.MinTimeToResolution.Duration > 0 && !end.IsZero() {
+		if end.Sub(now) < cfg.MinTimeToResolution.Duration {
+			return false
+		}
+	}
+	return true
+}
+
 // CheckMarket inspects recent trades for a single market and returns
 // any that exceed the OI threshold, enriched with book/holder context.
 // The open interest captured at market-refresh time is reused here rather
@@ -103,13 +144,18 @@ func (d *Detector) CheckMarket(ctx context.Context, tm TrackedMarket) ([]WhaleTr
 		return nil, nil
 	}
 
-	// 2. Check each new trade against the threshold.
+	// 2. Check each new trade against the threshold, then the optional
+	// signal-quality filters (all no-ops unless configured).
+	now := time.Now()
 	var flagged []Trade
 	for _, t := range newTrades {
-		ratio := t.USDValue() / oi
-		if ratio >= d.config.AlertThreshold {
-			flagged = append(flagged, t)
+		if t.USDValue()/oi < d.config.AlertThreshold {
+			continue
 		}
+		if !passesQuickFilters(d.config, t.USDValue(), t.Price, tm.EndDate, now) {
+			continue
+		}
+		flagged = append(flagged, t)
 	}
 
 	if len(flagged) == 0 {
@@ -125,14 +171,14 @@ func (d *Detector) CheckMarket(ctx context.Context, tm TrackedMarket) ([]WhaleTr
 	// 3. Enrich each flagged trade with midpoint, book depth, holder status.
 	var alerts []WhaleTrade
 	for _, t := range flagged {
-		alert, err := d.enrichTrade(ctx, market, t, oi)
+		alert, err := d.enrichTrade(ctx, market, t, oi, tm.EndDate)
 		if err != nil {
 			// Log but don't abort — partial enrichment is better than none.
 			slog.Warn("enrichment failed, emitting partial alert",
 				"market", shortID(condID),
 				"error", err,
 			)
-			alert = d.buildBaseAlert(market, t, oi)
+			alert = d.buildBaseAlert(market, t, oi, tm.EndDate)
 		}
 		alerts = append(alerts, alert)
 	}
@@ -141,8 +187,8 @@ func (d *Detector) CheckMarket(ctx context.Context, tm TrackedMarket) ([]WhaleTr
 }
 
 // enrichTrade fetches midpoint, order book, and holder data for a flagged trade.
-func (d *Detector) enrichTrade(ctx context.Context, market Market, trade Trade, oi float64) (WhaleTrade, error) {
-	alert := d.buildBaseAlert(market, trade, oi)
+func (d *Detector) enrichTrade(ctx context.Context, market Market, trade Trade, oi float64, endDate time.Time) (WhaleTrade, error) {
+	alert := d.buildBaseAlert(market, trade, oi, endDate)
 
 	// Determine which token ID to use for CLOB calls.
 	// The trade's Asset field is the token ID.
@@ -187,8 +233,9 @@ func (d *Detector) enrichTrade(ctx context.Context, market Market, trade Trade, 
 
 // buildBaseAlert creates the alert struct with data we already have,
 // before any enrichment calls.
-func (d *Detector) buildBaseAlert(market Market, trade Trade, oi float64) WhaleTrade {
+func (d *Detector) buildBaseAlert(market Market, trade Trade, oi float64, endDate time.Time) WhaleTrade {
 	usd := trade.USDValue()
+	ttr := daysUntil(endDate, time.Now())
 	return WhaleTrade{
 		Alert:     "WHALE_TRADE_DETECTED",
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -209,9 +256,11 @@ func (d *Detector) buildBaseAlert(market Market, trade Trade, oi float64) WhaleT
 			Timestamp: trade.Timestamp,
 		},
 		Context: WhaleContext{
-			OpenInterest:   oi,
-			TradeToOIRatio: usd / oi,
-			ThresholdPct:   d.config.AlertThreshold * 100,
+			OpenInterest:         oi,
+			TradeToOIRatio:       usd / oi,
+			ThresholdPct:         d.config.AlertThreshold * 100,
+			PriceRoom:            priceRoom(trade.Price),
+			TimeToResolutionDays: ttr,
 		},
 	}
 }
@@ -296,11 +345,12 @@ func (d *Detector) EnrichTradesDirect(ctx context.Context, trades []Trade) ([]Wh
 			oi = 1.0 // fallback so we don't divide by zero
 		}
 
-		// 3. Build base alert and enrich it.
-		alert, err := d.enrichTrade(ctx, *m, t, oi)
+		// 3. Build base alert and enrich it. The CLOB market lookup here does
+		// not carry a resolution date, so endDate is zero (ttr omitted).
+		alert, err := d.enrichTrade(ctx, *m, t, oi, m.EndTime())
 		if err != nil {
 			slog.Warn("enrichment failed, using partial alert", "error", err)
-			alert = d.buildBaseAlert(*m, t, oi)
+			alert = d.buildBaseAlert(*m, t, oi, m.EndTime())
 		}
 		alerts = append(alerts, alert)
 	}

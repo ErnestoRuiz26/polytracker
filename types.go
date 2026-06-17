@@ -3,7 +3,10 @@ package main
 // types.go — Data structures mapping to Polymarket API responses and internal models.
 // Field names use Go conventions; JSON tags match the API's snake_case.
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // ---------------------------------------------------------------------------
 // Gamma API: Market discovery
@@ -23,9 +26,29 @@ type Market struct {
 	// Raw JSON string from the API; parsed into TokenIDs below.
 	ClobTokenIdsRaw string `json:"clobTokenIds"`
 
+	// EndDateRaw is the market's resolution date as returned by Gamma (ISO 8601).
+	// Parsed on demand via EndTime(); may be empty if the API omits it.
+	EndDateRaw string `json:"endDate"`
+
 	// Parsed token IDs for the YES/NO outcome tokens.
 	// Populated by ParseTokenIDs() after unmarshaling.
 	TokenIDs []string `json:"-"`
+}
+
+// EndTime parses EndDateRaw into a time.Time. Returns the zero time if the
+// field is empty or unparseable, so callers can treat "unknown" uniformly.
+func (m *Market) EndTime() time.Time {
+	if m.EndDateRaw == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339, m.EndDateRaw); err == nil {
+		return t
+	}
+	// Fall back to a date-only layout for APIs that omit the time component.
+	if t, err := time.Parse("2006-01-02", m.EndDateRaw); err == nil {
+		return t
+	}
+	return time.Time{}
 }
 
 // TrackedMarket pairs a market with the open interest captured at refresh
@@ -33,8 +56,9 @@ type Market struct {
 // so OI is at most one market-refresh-interval stale — acceptable for the
 // trade/OI ratio threshold.
 type TrackedMarket struct {
-	Market Market
-	OI     float64
+	Market  Market
+	OI      float64
+	EndDate time.Time // resolution date, zero if unknown
 }
 
 // ParseTokenIDs decodes the ClobTokenIdsRaw JSON string into TokenIDs.
@@ -199,14 +223,16 @@ type WhaleTradeLeg struct {
 }
 
 type WhaleContext struct {
-	OpenInterest      float64        `json:"openInterest"`
-	TradeToOIRatio    float64        `json:"tradeToOiRatio"`
-	ThresholdPct      float64        `json:"thresholdPct"`
-	CurrentMidpoint   float64        `json:"currentMidpoint"`
-	OrderBookDepth    *BookDepthInfo `json:"orderBookDepth,omitempty"`
-	WalletIsTopHolder bool           `json:"walletIsTopHolder"`
-	WalletHolderRank  int            `json:"walletHolderRank,omitempty"`
-	WalletHolderAmt   float64        `json:"walletHolderAmount,omitempty"`
+	OpenInterest         float64        `json:"openInterest"`
+	TradeToOIRatio       float64        `json:"tradeToOiRatio"`
+	ThresholdPct         float64        `json:"thresholdPct"`
+	CurrentMidpoint      float64        `json:"currentMidpoint"`
+	PriceRoom            float64        `json:"priceRoom"`
+	TimeToResolutionDays float64        `json:"timeToResolutionDays,omitempty"`
+	OrderBookDepth       *BookDepthInfo `json:"orderBookDepth,omitempty"`
+	WalletIsTopHolder    bool           `json:"walletIsTopHolder"`
+	WalletHolderRank     int            `json:"walletHolderRank,omitempty"`
+	WalletHolderAmt      float64        `json:"walletHolderAmount,omitempty"`
 }
 
 // BookDepthInfo summarizes the order book at alert time.

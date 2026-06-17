@@ -277,7 +277,7 @@ func refreshMarkets(ctx context.Context, client *Client, cfg *Config) ([]Tracked
 				return
 			}
 
-			results <- TrackedMarket{Market: market, OI: oi}
+			results <- TrackedMarket{Market: market, OI: oi, EndDate: market.EndTime()}
 		}(m)
 	}
 

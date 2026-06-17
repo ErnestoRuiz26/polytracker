@@ -41,6 +41,9 @@ All settings live in **`settings.json`** alongside the binary. Edit this file to
   "min_open_interest": 10000,
   "max_open_interest": 0,
   "max_markets_per_cycle": 500,
+  "min_trade_usd": 0,
+  "max_signal_price": 0,
+  "min_time_to_resolution": "0s",
   "gamma_base_url": "https://gamma-api.polymarket.com",
   "data_base_url": "https://data-api.polymarket.com",
   "clob_base_url": "https://clob.polymarket.com"
@@ -58,6 +61,9 @@ All settings live in **`settings.json`** alongside the binary. Edit this file to
 | `min_open_interest` | `10000` | Minimum open interest (USD) — markets below this are ignored |
 | `max_open_interest` | `0` | Maximum open interest (USD) — `0` means no upper limit |
 | `max_markets_per_cycle` | `500` | Cap on total markets to monitor |
+| `min_trade_usd` | `0` | Signal filter: drop flagged trades below this absolute USD value. `0` disables (alerts still annotated). |
+| `max_signal_price` | `0` | Signal filter: drop flagged trades executed above this price (0–1). Near-1.0 = little room to resolution. `0` disables. |
+| `min_time_to_resolution` | `"0s"` | Signal filter: drop flagged trades in markets resolving sooner than this. `"0s"` disables. |
 | `gamma_base_url` | `"https://gamma-api.polymarket.com"` | Gamma API base URL |
 | `data_base_url` | `"https://data-api.polymarket.com"` | Data API base URL |
 | `clob_base_url` | `"https://clob.polymarket.com"` | CLOB API base URL |
@@ -77,6 +83,9 @@ For containerized deployments, every setting can be overridden via environment v
 | `PT_MIN_OI` | `min_open_interest` |
 | `PT_MAX_OI` | `max_open_interest` |
 | `PT_MAX_MARKETS` | `max_markets_per_cycle` |
+| `PT_MIN_TRADE_USD` | `min_trade_usd` |
+| `PT_MAX_SIGNAL_PRICE` | `max_signal_price` |
+| `PT_MIN_TIME_TO_RESOLUTION` | `min_time_to_resolution` |
 | `PT_GAMMA_URL` | `gamma_base_url` |
 | `PT_DATA_URL` | `data_base_url` |
 | `PT_CLOB_URL` | `clob_base_url` |
@@ -147,6 +156,8 @@ Each whale trade is recorded two ways: a single-line structured JSON object (one
     "tradeToOiRatio": 0.065,
     "thresholdPct": 5.0,
     "currentMidpoint": 0.66,
+    "priceRoom": 0.35,
+    "timeToResolutionDays": 124.5,
     "orderBookDepth": {
       "bestBid": "0.65",
       "bestAsk": "0.67",
@@ -159,6 +170,10 @@ Each whale trade is recorded two ways: a single-line structured JSON object (one
   }
 }
 ```
+
+**Signal-quality annotations** (always present, used by the optional filters and the planned composite scorer):
+- `priceRoom` — distance from the trade's entry price to certain resolution (`1 - price`). A 0.92 entry has `0.08` of room; lower = weaker signal.
+- `timeToResolutionDays` — days until the market's resolution date (from Gamma `endDate`). Omitted when the date is unknown. Negative means already past resolution.
 
 ### Filtering the JSON alerts
 

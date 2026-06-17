@@ -3,3 +3,6 @@ logs/
 
 # LLM related files
 CLAUDE.*
+
+# Build artifact
+polytracker

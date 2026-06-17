@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -67,6 +68,20 @@ func TestGetJSONRetriesThenSucceeds(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&calls); got != 3 {
 		t.Errorf("server calls = %d, want 3 (500,500,200)", got)
+	}
+}
+
+func TestGetJSONFailFastOnDNS(t *testing.T) {
+	c := testClient("http://does-not-exist.invalid")
+	defer c.Close()
+
+	var dest map[string]any
+	err := c.getJSON(context.Background(), "http://does-not-exist.invalid/x", &dest)
+	if err == nil {
+		t.Fatal("expected error on unresolvable host")
+	}
+	if !errors.Is(err, errNonRetryable) {
+		t.Errorf("DNS error not classified non-retryable: %v", err)
 	}
 }
 

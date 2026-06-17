@@ -63,6 +63,10 @@ func printSummary(alert WhaleTrade) {
 	fmt.Printf("Wallet:                %s\n", alert.Trade.Wallet)
 	fmt.Printf("Side:                  %s\n", alert.Trade.Side)
 	fmt.Printf("Predicted outcome:     %s\n", alert.Trade.Outcome)
+	fmt.Printf("Entry price:           %.3f  (room to 1.0: %.3f)\n", alert.Trade.Price, alert.Context.PriceRoom)
+	if alert.Context.TimeToResolutionDays != 0 {
+		fmt.Printf("Resolves in:           %.1f days\n", alert.Context.TimeToResolutionDays)
+	}
 	fmt.Printf("Market Link:           %s\n", alert.Market.MarketURL)
 	fmt.Printf("__________________________________________________\n\n")
 }

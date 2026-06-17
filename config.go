@@ -41,6 +41,23 @@ type Config struct {
 	// to stay within rate limits.
 	MaxMarketsPerCycle int `json:"max_markets_per_cycle"`
 
+	// --- Signal-quality filters (all default 0 = disabled) ---
+
+	// MinTradeUSD drops flagged trades whose absolute USD value is below this
+	// floor. Kills tiny trades that only clear the OI ratio because the market
+	// itself is small. 0 disables the floor.
+	MinTradeUSD float64 `json:"min_trade_usd"`
+
+	// MaxSignalPrice drops flagged trades executed above this price (0-1).
+	// A trade near 1.0 has little room left to resolution, so it is a weak
+	// signal. 0 disables the ceiling (trades are still annotated with priceRoom).
+	MaxSignalPrice float64 `json:"max_signal_price"`
+
+	// MinTimeToResolution drops flagged trades in markets resolving sooner than
+	// this. Short-dated markets leave little time for a thesis to play out.
+	// 0 disables the floor (alerts are still annotated with timeToResolutionDays).
+	MinTimeToResolution Duration `json:"min_time_to_resolution"`
+
 	// API base URLs — separated so they can be pointed at proxies or mocks.
 	GammaBaseURL string `json:"gamma_base_url"`
 	DataBaseURL  string `json:"data_base_url"`
@@ -136,6 +153,9 @@ func applyEnvOverrides(cfg *Config) {
 	envFloat("PT_MIN_OI", &cfg.MinOpenInterest)
 	envFloat("PT_MAX_OI", &cfg.MaxOpenInterest)
 	envInt("PT_MAX_MARKETS", &cfg.MaxMarketsPerCycle)
+	envFloat("PT_MIN_TRADE_USD", &cfg.MinTradeUSD)
+	envFloat("PT_MAX_SIGNAL_PRICE", &cfg.MaxSignalPrice)
+	envDuration("PT_MIN_TIME_TO_RESOLUTION", &cfg.MinTimeToResolution)
 	envStrInto("PT_GAMMA_URL", &cfg.GammaBaseURL)
 	envStrInto("PT_DATA_URL", &cfg.DataBaseURL)
 	envStrInto("PT_CLOB_URL", &cfg.CLOBBaseURL)
