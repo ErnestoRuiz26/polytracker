@@ -62,11 +62,18 @@ func printSummary(alert WhaleTrade) {
 	fmt.Printf("Placed At:             %s\n", placedTime)
 	fmt.Printf("Wallet:                %s\n", alert.Trade.Wallet)
 	fmt.Printf("Side:                  %s\n", alert.Trade.Side)
+	if alert.Context.PositionAction != "" && alert.Context.PositionAction != actionUnknown {
+		fmt.Printf("Position action:       %s (avg entry %.3f, realized P&L $%.2f)\n",
+			alert.Context.PositionAction, alert.Context.WalletAvgPrice, alert.Context.WalletRealizedPnl)
+	}
 	fmt.Printf("Predicted outcome:     %s\n", alert.Trade.Outcome)
 	fmt.Printf("Entry price:           %.3f  (room to 1.0: %.3f)\n", alert.Trade.Price, alert.Context.PriceRoom)
 	if alert.Context.TimeToResolutionDays != 0 {
 		fmt.Printf("Resolves in:           %.1f days\n", alert.Context.TimeToResolutionDays)
 	}
+	b := alert.Context.ScoreBreakdown
+	fmt.Printf("Signal score:          %.0f/100 (size %.2f room %.2f time %.2f action %.2f)\n",
+		alert.Context.SignalScore, b["size"], b["room"], b["time"], b["action"])
 	fmt.Printf("Market Link:           %s\n", alert.Market.MarketURL)
 	fmt.Printf("__________________________________________________\n\n")
 }

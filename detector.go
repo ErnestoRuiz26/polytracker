@@ -60,6 +60,41 @@ func newTradesSince(trades []Trade, lastSeen int64) (newer []Trade, maxTS int64)
 	return newer, maxTS
 }
 
+// Position-action classifications for WhaleContext.PositionAction.
+const (
+	actionOpen     = "OPEN"
+	actionIncrease = "INCREASE"
+	actionReduce   = "REDUCE"
+	actionClose    = "CLOSE"
+	actionUnknown  = "UNKNOWN" // positions lookup failed or trade side unrecognized
+)
+
+// classifyPosition decides whether a trade opened, added to, reduced, or closed
+// the wallet's position in a token. sizeNow is the wallet's current holding of
+// that token (0 if absent from /positions). It infers the pre-trade balance by
+// backing out the trade from the current size, with a tolerance to absorb
+// fee/rounding drift and minor races between the trade and the snapshot.
+func classifyPosition(side string, tradeSize, sizeNow float64) string {
+	tol := tradeSize * 0.01
+	if tol < 1 {
+		tol = 1
+	}
+	switch strings.ToUpper(side) {
+	case "BUY":
+		if sizeNow-tradeSize <= tol {
+			return actionOpen
+		}
+		return actionIncrease
+	case "SELL":
+		if sizeNow <= tol {
+			return actionClose
+		}
+		return actionReduce
+	default:
+		return actionUnknown
+	}
+}
+
 // priceRoom returns how far a trade's price sits from certain resolution (1.0).
 // A 0.92 entry yields 0.08 of room; clamped to [0,1] for malformed prices.
 func priceRoom(price float64) float64 {
@@ -99,6 +134,88 @@ func passesQuickFilters(cfg *Config, usd, price float64, end, now time.Time) boo
 		}
 	}
 	return true
+}
+
+// actionScore maps a position action to its sub-score contribution. Fresh
+// conviction (opening / adding) scores high; exiting scores low; unknown sits
+// neutral so a failed positions lookup neither rewards nor punishes the trade.
+func actionScore(action string) float64 {
+	switch action {
+	case actionOpen:
+		return 1.0
+	case actionIncrease:
+		return 0.9
+	case actionReduce:
+		return 0.3
+	case actionClose:
+		return 0.1
+	default: // actionUnknown
+		return 0.5
+	}
+}
+
+// clamp01 bounds x to [0,1].
+func clamp01(x float64) float64 {
+	if x < 0 {
+		return 0
+	}
+	if x > 1 {
+		return 1
+	}
+	return x
+}
+
+// computeScore combines the annotated sub-signals into a 0-100 composite
+// signal score plus the per-signal breakdown. Each sub-signal is normalized to
+// [0,1], then blended by the configured (auto-normalized) weights:
+//
+//   - size:   trade/OI ratio, saturating at cfg.ScoreRefRatio
+//   - room:   price room to resolution (1 - price)
+//   - time:   days to resolution, saturating at cfg.ScoreRefDays;
+//     unknown date (days == 0) is treated as neutral 0.5
+//   - action: position action (open/increase/reduce/close)
+//
+// Returns (0, nil) when total weight is non-positive, so a misconfiguration
+// can't silently scale all alerts to the same number.
+func computeScore(cfg *Config, ratio, room, days float64, action string) (float64, map[string]float64) {
+	w := cfg.ScoreWeights
+	total := w.Size + w.Room + w.Time + w.Action
+	if total <= 0 {
+		return 0, nil
+	}
+
+	sSize := clamp01(ratio / cfg.ScoreRefRatio)
+	sRoom := clamp01(room)
+	var sTime float64
+	switch {
+	case days == 0: // unknown resolution date
+		sTime = 0.5
+	case days < 0: // already past resolution
+		sTime = 0
+	default:
+		sTime = clamp01(days / cfg.ScoreRefDays)
+	}
+	sAction := actionScore(action)
+
+	breakdown := map[string]float64{
+		"size":   sSize,
+		"room":   sRoom,
+		"time":   sTime,
+		"action": sAction,
+	}
+
+	weighted := w.Size*sSize + w.Room*sRoom + w.Time*sTime + w.Action*sAction
+	return 100 * weighted / total, breakdown
+}
+
+// scoreAlert computes and attaches the composite signal score to an alert from
+// its already-populated context fields. Called after enrichment so PositionAction
+// reflects the real classification.
+func (d *Detector) scoreAlert(alert *WhaleTrade) {
+	c := &alert.Context
+	c.SignalScore, c.ScoreBreakdown = computeScore(
+		d.config, c.TradeToOIRatio, c.PriceRoom, c.TimeToResolutionDays, c.PositionAction,
+	)
 }
 
 // CheckMarket inspects recent trades for a single market and returns
@@ -168,7 +285,10 @@ func (d *Detector) CheckMarket(ctx context.Context, tm TrackedMarket) ([]WhaleTr
 		"oi", oi,
 	)
 
-	// 3. Enrich each flagged trade with midpoint, book depth, holder status.
+	// 3. Enrich each flagged trade with midpoint, book depth, holder status,
+	// then score it. The composite score gate (min_score) is applied here —
+	// after enrichment — because the score depends on PositionAction, which is
+	// only known once the positions lookup completes.
 	var alerts []WhaleTrade
 	for _, t := range flagged {
 		alert, err := d.enrichTrade(ctx, market, t, oi, tm.EndDate)
@@ -179,6 +299,14 @@ func (d *Detector) CheckMarket(ctx context.Context, tm TrackedMarket) ([]WhaleTr
 				"error", err,
 			)
 			alert = d.buildBaseAlert(market, t, oi, tm.EndDate)
+			d.scoreAlert(&alert)
+		}
+		if d.config.MinScore > 0 && alert.Context.SignalScore < d.config.MinScore {
+			slog.Debug("dropping trade below min score",
+				"score", alert.Context.SignalScore,
+				"min", d.config.MinScore,
+			)
+			continue
 		}
 		alerts = append(alerts, alert)
 	}
@@ -228,6 +356,31 @@ func (d *Detector) enrichTrade(ctx context.Context, market Market, trade Trade, 
 		slog.Debug("holders fetch failed", "error", err)
 	}
 
+	// Classify open vs close from the wallet's current position (best-effort).
+	// On failure the alert keeps the UNKNOWN default set in buildBaseAlert.
+	if positions, err := d.client.FetchPositions(ctx, trade.ProxyWallet, market.ConditionID); err == nil {
+		var sizeNow float64
+		var matched *Position
+		for i := range positions {
+			if positions[i].Asset == trade.Asset {
+				matched = &positions[i]
+				sizeNow = positions[i].Size
+				break
+			}
+		}
+		alert.Context.PositionAction = classifyPosition(trade.Side, trade.Size, sizeNow)
+		if matched != nil {
+			alert.Context.WalletAvgPrice = matched.AvgPrice
+			alert.Context.WalletRealizedPnl = matched.RealizedPnl
+			alert.Context.WalletPositionSize = matched.Size
+		}
+	} else {
+		slog.Debug("positions fetch failed", "error", err)
+	}
+
+	// Score the alert from its now-populated context (ratio, room, time, action).
+	d.scoreAlert(&alert)
+
 	return alert, nil
 }
 
@@ -261,6 +414,7 @@ func (d *Detector) buildBaseAlert(market Market, trade Trade, oi float64, endDat
 			ThresholdPct:         d.config.AlertThreshold * 100,
 			PriceRoom:            priceRoom(trade.Price),
 			TimeToResolutionDays: ttr,
+			PositionAction:       actionUnknown,
 		},
 	}
 }
@@ -351,6 +505,7 @@ func (d *Detector) EnrichTradesDirect(ctx context.Context, trades []Trade) ([]Wh
 		if err != nil {
 			slog.Warn("enrichment failed, using partial alert", "error", err)
 			alert = d.buildBaseAlert(*m, t, oi, m.EndTime())
+			d.scoreAlert(&alert)
 		}
 		alerts = append(alerts, alert)
 	}

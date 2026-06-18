@@ -58,6 +58,24 @@ type Config struct {
 	// 0 disables the floor (alerts are still annotated with timeToResolutionDays).
 	MinTimeToResolution Duration `json:"min_time_to_resolution"`
 
+	// --- Composite signal score ---
+
+	// ScoreWeights sets the relative weight of each sub-signal in the composite
+	// signalScore. Weights are auto-normalized, so they need not sum to 1.
+	ScoreWeights ScoreWeights `json:"score_weights"`
+
+	// ScoreRefRatio is the trade/OI ratio at which the size sub-score saturates
+	// to 1.0. e.g. 0.25 means a trade worth 25% of OI scores maximum on size.
+	ScoreRefRatio float64 `json:"score_ref_ratio"`
+
+	// ScoreRefDays is the time-to-resolution (days) at which the time sub-score
+	// saturates to 1.0.
+	ScoreRefDays float64 `json:"score_ref_days"`
+
+	// MinScore drops flagged trades whose composite signalScore is below this
+	// value (0-100). 0 disables the gate (alerts are still annotated with the score).
+	MinScore float64 `json:"min_score"`
+
 	// API base URLs — separated so they can be pointed at proxies or mocks.
 	GammaBaseURL string `json:"gamma_base_url"`
 	DataBaseURL  string `json:"data_base_url"`
@@ -65,6 +83,15 @@ type Config struct {
 
 	// RateLimitRPS caps the total requests per second made by the client.
 	RateLimitRPS int `json:"rate_limit_rps"`
+}
+
+// ScoreWeights holds the per-signal weights for the composite signalScore.
+// Each field maps to one normalized sub-signal in computeScore.
+type ScoreWeights struct {
+	Size   float64 `json:"size"`   // weight of trade/OI ratio
+	Room   float64 `json:"room"`   // weight of price room to resolution
+	Time   float64 `json:"time"`   // weight of time to resolution
+	Action float64 `json:"action"` // weight of position action (open/close)
 }
 
 // Duration wraps time.Duration so it can be unmarshaled from a JSON string
@@ -140,6 +167,15 @@ func defaults() *Config {
 		DataBaseURL:           "https://data-api.polymarket.com",
 		CLOBBaseURL:           "https://clob.polymarket.com",
 		RateLimitRPS:          10,
+		ScoreWeights: ScoreWeights{
+			Size:   0.40,
+			Room:   0.15,
+			Time:   0.15,
+			Action: 0.30,
+		},
+		ScoreRefRatio: 0.25,
+		ScoreRefDays:  30,
+		MinScore:      0,
 	}
 }
 
@@ -156,6 +192,13 @@ func applyEnvOverrides(cfg *Config) {
 	envFloat("PT_MIN_TRADE_USD", &cfg.MinTradeUSD)
 	envFloat("PT_MAX_SIGNAL_PRICE", &cfg.MaxSignalPrice)
 	envDuration("PT_MIN_TIME_TO_RESOLUTION", &cfg.MinTimeToResolution)
+	envFloat("PT_SCORE_WEIGHT_SIZE", &cfg.ScoreWeights.Size)
+	envFloat("PT_SCORE_WEIGHT_ROOM", &cfg.ScoreWeights.Room)
+	envFloat("PT_SCORE_WEIGHT_TIME", &cfg.ScoreWeights.Time)
+	envFloat("PT_SCORE_WEIGHT_ACTION", &cfg.ScoreWeights.Action)
+	envFloat("PT_SCORE_REF_RATIO", &cfg.ScoreRefRatio)
+	envFloat("PT_SCORE_REF_DAYS", &cfg.ScoreRefDays)
+	envFloat("PT_MIN_SCORE", &cfg.MinScore)
 	envStrInto("PT_GAMMA_URL", &cfg.GammaBaseURL)
 	envStrInto("PT_DATA_URL", &cfg.DataBaseURL)
 	envStrInto("PT_CLOB_URL", &cfg.CLOBBaseURL)

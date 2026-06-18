@@ -186,6 +186,23 @@ func (c *Client) FetchHolders(ctx context.Context, conditionID string, limit int
 	return groups, nil
 }
 
+// FetchPositions returns a wallet's current token positions for a single
+// market. The market filter keeps the payload to the one (or two) outcome
+// tokens rather than the wallet's entire book.
+func (c *Client) FetchPositions(ctx context.Context, walletAddress, conditionID string) ([]Position, error) {
+	params := url.Values{
+		"user":   {walletAddress},
+		"market": {conditionID},
+	}
+	endpoint := fmt.Sprintf("%s/positions?%s", c.dataURL, params.Encode())
+
+	var positions []Position
+	if err := c.getJSON(ctx, endpoint, &positions); err != nil {
+		return nil, fmt.Errorf("fetch positions for %s: %w", shortID(walletAddress), err)
+	}
+	return positions, nil
+}
+
 // ---------------------------------------------------------------------------
 // CLOB API
 // ---------------------------------------------------------------------------

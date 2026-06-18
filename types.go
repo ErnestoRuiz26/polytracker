@@ -144,6 +144,23 @@ type OpenInterest struct {
 }
 
 // ---------------------------------------------------------------------------
+// Data API: Positions
+// ---------------------------------------------------------------------------
+
+// Position is a wallet's current holding of a single outcome token, from the
+// Data API /positions endpoint. Used to classify whether a trade opened or
+// closed a position (see classifyPosition).
+type Position struct {
+	ProxyWallet string  `json:"proxyWallet"`
+	Asset       string  `json:"asset"`
+	ConditionID string  `json:"conditionId"`
+	Size        float64 `json:"size"`
+	AvgPrice    float64 `json:"avgPrice"`
+	RealizedPnl float64 `json:"realizedPnl"`
+	CurPrice    float64 `json:"curPrice"`
+}
+
+// ---------------------------------------------------------------------------
 // Data API: Holders
 // ---------------------------------------------------------------------------
 
@@ -233,6 +250,19 @@ type WhaleContext struct {
 	WalletIsTopHolder    bool           `json:"walletIsTopHolder"`
 	WalletHolderRank     int            `json:"walletHolderRank,omitempty"`
 	WalletHolderAmt      float64        `json:"walletHolderAmount,omitempty"`
+
+	// PositionAction classifies the trade relative to the wallet's prior holding
+	// of the token: OPEN, INCREASE, REDUCE, CLOSE, or UNKNOWN (positions lookup
+	// failed). Derived from the /positions snapshot — see classifyPosition.
+	PositionAction     string  `json:"positionAction"`
+	WalletAvgPrice     float64 `json:"walletAvgPrice,omitempty"`
+	WalletRealizedPnl  float64 `json:"walletRealizedPnl,omitempty"`
+	WalletPositionSize float64 `json:"walletPositionSize,omitempty"`
+
+	// SignalScore is the composite 0-100 signal strength (see computeScore).
+	// ScoreBreakdown holds the individual [0,1] sub-scores for tuning/debug.
+	SignalScore    float64            `json:"signalScore"`
+	ScoreBreakdown map[string]float64 `json:"scoreBreakdown,omitempty"`
 }
 
 // BookDepthInfo summarizes the order book at alert time.

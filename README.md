@@ -44,6 +44,10 @@ All settings live in **`settings.json`** alongside the binary. Edit this file to
   "min_trade_usd": 0,
   "max_signal_price": 0,
   "min_time_to_resolution": "0s",
+  "score_weights": { "size": 0.40, "room": 0.15, "time": 0.15, "action": 0.30 },
+  "score_ref_ratio": 0.25,
+  "score_ref_days": 30,
+  "min_score": 0,
   "gamma_base_url": "https://gamma-api.polymarket.com",
   "data_base_url": "https://data-api.polymarket.com",
   "clob_base_url": "https://clob.polymarket.com"
@@ -64,6 +68,10 @@ All settings live in **`settings.json`** alongside the binary. Edit this file to
 | `min_trade_usd` | `0` | Signal filter: drop flagged trades below this absolute USD value. `0` disables (alerts still annotated). |
 | `max_signal_price` | `0` | Signal filter: drop flagged trades executed above this price (0–1). Near-1.0 = little room to resolution. `0` disables. |
 | `min_time_to_resolution` | `"0s"` | Signal filter: drop flagged trades in markets resolving sooner than this. `"0s"` disables. |
+| `score_weights` | `{size:0.40, room:0.15, time:0.15, action:0.30}` | Relative weight of each sub-signal in the composite `signalScore`. Auto-normalized — need not sum to 1. |
+| `score_ref_ratio` | `0.25` | Trade/OI ratio at which the size sub-score saturates to 1.0 (25% of OI = max). |
+| `score_ref_days` | `30` | Days-to-resolution at which the time sub-score saturates to 1.0. |
+| `min_score` | `0` | Signal filter: drop flagged trades whose composite `signalScore` (0–100) is below this. `0` disables (alerts still annotated). |
 | `gamma_base_url` | `"https://gamma-api.polymarket.com"` | Gamma API base URL |
 | `data_base_url` | `"https://data-api.polymarket.com"` | Data API base URL |
 | `clob_base_url` | `"https://clob.polymarket.com"` | CLOB API base URL |
@@ -86,6 +94,13 @@ For containerized deployments, every setting can be overridden via environment v
 | `PT_MIN_TRADE_USD` | `min_trade_usd` |
 | `PT_MAX_SIGNAL_PRICE` | `max_signal_price` |
 | `PT_MIN_TIME_TO_RESOLUTION` | `min_time_to_resolution` |
+| `PT_SCORE_WEIGHT_SIZE` | `score_weights.size` |
+| `PT_SCORE_WEIGHT_ROOM` | `score_weights.room` |
+| `PT_SCORE_WEIGHT_TIME` | `score_weights.time` |
+| `PT_SCORE_WEIGHT_ACTION` | `score_weights.action` |
+| `PT_SCORE_REF_RATIO` | `score_ref_ratio` |
+| `PT_SCORE_REF_DAYS` | `score_ref_days` |
+| `PT_MIN_SCORE` | `min_score` |
 | `PT_GAMMA_URL` | `gamma_base_url` |
 | `PT_DATA_URL` | `data_base_url` |
 | `PT_CLOB_URL` | `clob_base_url` |
@@ -166,7 +181,18 @@ Each whale trade is recorded two ways: a single-line structured JSON object (one
     },
     "walletIsTopHolder": true,
     "walletHolderRank": 3,
-    "walletHolderAmount": 120000
+    "walletHolderAmount": 120000,
+    "positionAction": "OPEN",
+    "walletAvgPrice": 0.63,
+    "walletRealizedPnl": 0,
+    "walletPositionSize": 50000,
+    "signalScore": 73.5,
+    "scoreBreakdown": {
+      "size": 0.80,
+      "room": 0.35,
+      "time": 0.50,
+      "action": 1.00
+    }
   }
 }
 ```
@@ -174,6 +200,8 @@ Each whale trade is recorded two ways: a single-line structured JSON object (one
 **Signal-quality annotations** (always present, used by the optional filters and the planned composite scorer):
 - `priceRoom` — distance from the trade's entry price to certain resolution (`1 - price`). A 0.92 entry has `0.08` of room; lower = weaker signal.
 - `timeToResolutionDays` — days until the market's resolution date (from Gamma `endDate`). Omitted when the date is unknown. Negative means already past resolution.
+- `positionAction` — whether the trade `OPEN`ed, `INCREASE`d, `REDUCE`d, or `CLOSE`d the wallet's holding of that token (`UNKNOWN` if the positions lookup failed). Derived by comparing the trade against the wallet's current `/positions` snapshot. `walletAvgPrice` / `walletRealizedPnl` / `walletPositionSize` give the wallet's standing in that token. **Note:** the snapshot is read at alert time, not trade time, so classification can be off for wallets trading the same token several times within one poll interval.
+- `signalScore` — composite 0–100 strength, a weighted blend of four normalized sub-signals (`scoreBreakdown`, each 0–1): **size** (`tradeToOiRatio`, saturating at `score_ref_ratio`), **room** (`priceRoom`), **time** (`timeToResolutionDays`, saturating at `score_ref_days`; unknown date → neutral 0.5, past resolution → 0), and **action** (`positionAction`: open 1.0 → close 0.1, unknown 0.5). Weights come from `score_weights` (auto-normalized). Tune the weights/refs to match what you consider a strong signal; set `min_score` to drop everything below a cutoff.
 
 ### Filtering the JSON alerts
 
