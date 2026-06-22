@@ -1,5 +1,5 @@
 {
-  "alert_threshold": 0.05,
+  "alert_threshold": 0.08,
   "poll_interval": "60s",
   "market_refresh_interval": "5m",
   "max_concurrency": 10,
@@ -17,7 +17,7 @@
   },
   "score_ref_ratio": 0.25,
   "score_ref_days": 30,
-  "min_score": 0,
+  "min_score": 80,
   "gamma_base_url": "https://gamma-api.polymarket.com",
   "data_base_url": "https://data-api.polymarket.com",
   "clob_base_url": "https://clob.polymarket.com",

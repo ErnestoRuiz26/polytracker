@@ -129,17 +129,22 @@ Every 5m: refresh active market list and capture each market's open interest (Da
 Every 60s per market (reusing the OI from the last refresh):
   ┌─ Fetch recent trades (Data API)
   ├─ For each new trade: is trade_USD / OI ≥ threshold?
-  │   └─ YES → Enrich with:
+  │   └─ YES → Apply optional signal-quality filters (min_trade_usd,
+  │           max_signal_price, min_time_to_resolution) → Enrich with:
   │       ├─ Current midpoint price (CLOB API)
   │       ├─ Order book depth — top 5 bid/ask levels (CLOB API)
-  │       └─ Top holder check — is this wallet already a major holder? (Data API)
+  │       ├─ Top holder check — is this wallet already a major holder? (Data API)
+  │       └─ Open/close classification — open, add, reduce, or close? (Data API /positions)
+  │       → Compute composite signalScore (size/room/time/action); drop if below min_score
   └─ Write structured JSON alert to the session log file + readable summary to stdout
 ```
 
 **Key behaviors:**
+
 - **Markets are refreshed every 5 minutes** — filtered by an OI floor and optional ceiling to skip illiquid or mega-markets
 - **Trade deduplication** — timestamps are tracked per-market so the same trade is never flagged twice
-- **Graceful degradation** — if enrichment calls fail (midpoint, book, holders), the alert still fires with partial context
+- **Signal-quality filters & scoring** — flagged trades are annotated with `priceRoom`, `timeToResolutionDays`, `positionAction`, and a composite `signalScore`; optional hard filters (`min_trade_usd`, `max_signal_price`, `min_time_to_resolution`, `min_score`) drop weak signals. All default-off — zero behavior change until tuned.
+- **Graceful degradation** — if enrichment calls fail (midpoint, book, holders, positions), the alert still fires with partial context
 - **Clean shutdown** — `Ctrl+C` / `SIGTERM` drains in-flight checks without noisy errors
 
 ---
@@ -197,30 +202,12 @@ Each whale trade is recorded two ways: a single-line structured JSON object (one
 }
 ```
 
-**Signal-quality annotations** (always present, used by the optional filters and the planned composite scorer):
+**Signal-quality annotations** (always present, used by the optional filters and the composite scorer):
+
 - `priceRoom` — distance from the trade's entry price to certain resolution (`1 - price`). A 0.92 entry has `0.08` of room; lower = weaker signal.
 - `timeToResolutionDays` — days until the market's resolution date (from Gamma `endDate`). Omitted when the date is unknown. Negative means already past resolution.
 - `positionAction` — whether the trade `OPEN`ed, `INCREASE`d, `REDUCE`d, or `CLOSE`d the wallet's holding of that token (`UNKNOWN` if the positions lookup failed). Derived by comparing the trade against the wallet's current `/positions` snapshot. `walletAvgPrice` / `walletRealizedPnl` / `walletPositionSize` give the wallet's standing in that token. **Note:** the snapshot is read at alert time, not trade time, so classification can be off for wallets trading the same token several times within one poll interval.
 - `signalScore` — composite 0–100 strength, a weighted blend of four normalized sub-signals (`scoreBreakdown`, each 0–1): **size** (`tradeToOiRatio`, saturating at `score_ref_ratio`), **room** (`priceRoom`), **time** (`timeToResolutionDays`, saturating at `score_ref_days`; unknown date → neutral 0.5, past resolution → 0), and **action** (`positionAction`: open 1.0 → close 0.1, unknown 0.5). Weights come from `score_weights` (auto-normalized). Tune the weights/refs to match what you consider a strong signal; set `min_score` to drop everything below a cutoff.
-
-### Filtering the JSON alerts
-
-Structured alerts land in the session log file under `logs/` as one slog JSON
-line per trade, with the full alert nested under `full_alert`. Extract and
-filter them with `jq`:
-
-```bash
-# Pull the nested alert payloads out of the newest session log
-jq -c 'select(.msg == "WHALE_TRADE_DETECTED") | .full_alert' logs/session_*.log
-
-# Filter for trades above $50K
-jq -c 'select(.msg == "WHALE_TRADE_DETECTED") | .full_alert
-       | select(.trade.usdValue > 50000)' logs/session_*.log
-
-# Watch for repeat accumulation (wallet is already a top holder)
-jq -c 'select(.msg == "WHALE_TRADE_DETECTED") | .full_alert
-       | select(.context.walletIsTopHolder == true)' logs/session_*.log
-```
 
 ---
 
@@ -232,7 +219,7 @@ polytracker/
 ├── config.go        Settings file loader with env var overrides
 ├── types.go         Data structures for API responses and alert payloads
 ├── api.go           HTTP client for Gamma, Data, and CLOB APIs (retry + backoff)
-├── detector.go      Threshold detection, trade dedup, enrichment pipeline
+├── detector.go      Threshold detection, trade dedup, signal filters, scoring, enrichment
 ├── alerter.go       Structured JSON alert output via slog
 ├── settings.json    Configuration file (edit this)
 └── go.mod           Module definition (stdlib only, no external deps)
@@ -243,7 +230,7 @@ polytracker/
 | API | Base URL | Endpoints | Auth |
 |-----|----------|-----------|------|
 | **Gamma** (market discovery) | `gamma-api.polymarket.com` | `GET /markets` | None |
-| **Data** (trades & analytics) | `data-api.polymarket.com` | `GET /trades`, `GET /oi`, `GET /holders` | None |
+| **Data** (trades & analytics) | `data-api.polymarket.com` | `GET /trades`, `GET /oi`, `GET /holders`, `GET /positions` | None |
 | **CLOB** (pricing & order book) | `clob.polymarket.com` | `GET /midpoint`, `GET /book` | None |
 
 All endpoints are public and require no authentication.
@@ -251,8 +238,9 @@ All endpoints are public and require no authentication.
 ### Rate Limiting
 
 The service is designed to be API-friendly:
+
 - **Concurrency is bounded** by a semaphore pool (`max_concurrency`, default 10)
-- **Expensive calls** (midpoint, order book, holders) only fire on flagged trades, not every market
+- **Expensive calls** (midpoint, order book, holders, positions) only fire on flagged trades, not every market
 - **Failed requests** retry with exponential backoff (500ms → 1s → 2s, max 3 attempts)
 - **429/5xx responses** are retried automatically; 4xx errors fail immediately
 

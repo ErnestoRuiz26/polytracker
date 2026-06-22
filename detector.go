@@ -507,6 +507,17 @@ func (d *Detector) EnrichTradesDirect(ctx context.Context, trades []Trade) ([]Wh
 			alert = d.buildBaseAlert(*m, t, oi, m.EndTime())
 			d.scoreAlert(&alert)
 		}
+		// Apply the composite score gate (no-op when min_score is 0). Note: in
+		// wallet mode the CLOB market lookup carries no resolution date, so the
+		// time sub-score is the neutral 0.5 — the gate still works, but the score
+		// is weaker than in market-scan mode where Gamma supplies endDate.
+		if d.config.MinScore > 0 && alert.Context.SignalScore < d.config.MinScore {
+			slog.Debug("dropping trade below min score",
+				"score", alert.Context.SignalScore,
+				"min", d.config.MinScore,
+			)
+			continue
+		}
 		alerts = append(alerts, alert)
 	}
 	return alerts, nil
