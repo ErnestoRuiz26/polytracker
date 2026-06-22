@@ -157,7 +157,16 @@ type Position struct {
 	Size        float64 `json:"size"`
 	AvgPrice    float64 `json:"avgPrice"`
 	RealizedPnl float64 `json:"realizedPnl"`
+	CashPnl     float64 `json:"cashPnl"`
 	CurPrice    float64 `json:"curPrice"`
+	Title       string  `json:"title"`
+}
+
+// TotalPnl is the position's full P&L: profit locked in from earlier sells
+// (RealizedPnl) plus the gain/loss on shares still held (CashPnl). For a market
+// that has resolved, the held portion is settled, so this is fully realized.
+func (p *Position) TotalPnl() float64 {
+	return p.RealizedPnl + p.CashPnl
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +272,33 @@ type WhaleContext struct {
 	// ScoreBreakdown holds the individual [0,1] sub-scores for tuning/debug.
 	SignalScore    float64            `json:"signalScore"`
 	ScoreBreakdown map[string]float64 `json:"scoreBreakdown,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// Internal: Wallet history
+// ---------------------------------------------------------------------------
+
+// PriceBucket aggregates resolved positions whose entry price (avgPrice) falls
+// in [Lo, Hi). A "win" is a position with positive total P&L.
+type PriceBucket struct {
+	Label    string  `json:"label"`
+	Lo       float64 `json:"lo"`
+	Hi       float64 `json:"hi"`
+	Count    int     `json:"count"`
+	Wins     int     `json:"wins"`
+	WinRate  float64 `json:"winRate"` // 0-1, 0 when Count is 0
+	TotalPnl float64 `json:"totalPnl"`
+}
+
+// WalletHistory is the realized-P&L and win-rate summary for a wallet across
+// all of its resolved positions.
+type WalletHistory struct {
+	Wallet           string        `json:"wallet"`
+	ResolvedCount    int           `json:"resolvedPositions"`
+	Wins             int           `json:"wins"`
+	OverallWinRate   float64       `json:"overallWinRate"` // 0-1
+	TotalRealizedPnl float64       `json:"totalRealizedPnl"`
+	Buckets          []PriceBucket `json:"buckets"`
 }
 
 // BookDepthInfo summarizes the order book at alert time.

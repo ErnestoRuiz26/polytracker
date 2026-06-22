@@ -203,6 +203,49 @@ func (c *Client) FetchPositions(ctx context.Context, walletAddress, conditionID 
 	return positions, nil
 }
 
+// positionsPageLimit is how many position rows to request per page, and
+// maxPositionsTotal caps the total pulled so a hyperactive wallet can't make
+// wallet-history paginate forever.
+const (
+	positionsPageLimit = 500
+	maxPositionsTotal  = 5000
+)
+
+// FetchAllPositions returns every position for a wallet across all markets,
+// including resolved/closed ones. sizeThreshold=0 surfaces positions whose
+// share balance has gone to zero (sold or settled), which the default endpoint
+// hides. Paginates by offset until exhausted or maxPositionsTotal is reached.
+func (c *Client) FetchAllPositions(ctx context.Context, walletAddress string) ([]Position, error) {
+	var all []Position
+	offset := 0
+
+	for {
+		params := url.Values{
+			"user":          {walletAddress},
+			"sizeThreshold": {"0"},
+			"limit":         {strconv.Itoa(positionsPageLimit)},
+			"offset":        {strconv.Itoa(offset)},
+		}
+		endpoint := fmt.Sprintf("%s/positions?%s", c.dataURL, params.Encode())
+
+		var page []Position
+		if err := c.getJSON(ctx, endpoint, &page); err != nil {
+			return all, fmt.Errorf("fetch positions for %s offset=%d: %w", shortID(walletAddress), offset, err)
+		}
+
+		all = append(all, page...)
+		if len(page) < positionsPageLimit || len(all) >= maxPositionsTotal {
+			break
+		}
+		offset += positionsPageLimit
+	}
+
+	if len(all) > maxPositionsTotal {
+		all = all[:maxPositionsTotal]
+	}
+	return all, nil
+}
+
 // ---------------------------------------------------------------------------
 // CLOB API
 // ---------------------------------------------------------------------------

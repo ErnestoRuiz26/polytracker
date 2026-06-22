@@ -22,9 +22,39 @@ go build -o polytracker .
 
 # Track trade history and new trades for a specific wallet
 ./polytracker track --wallet=0xd81fbc5c53593e4e2923a641ff2bc7e2d9866b75
+
+# Summarize a wallet's realized P&L and win rate across resolved positions
+./polytracker wallet-history 0xd81fbc5c53593e4e2923a641ff2bc7e2d9866b75
 ```
 
 When tracking a specific wallet, the tool retrieves and paginates historical trades 10 at a time (sorted latest to oldest). Pressing `[Enter]` transitions to real-time tracking, polling every `poll_interval`. Log files are saved under `logs/` with names following `session_command_flag_DATE_TIME.log`.
+
+### `wallet-history <wallet>`
+
+Prints a one-shot summary of a wallet's **realized P&L** and **win rate by entry-price bucket** across all of its *resolved* positions:
+
+```
+══════════════════════════════════════════════════════════════
+ Wallet history: 0xd81f...
+══════════════════════════════════════════════════════════════
+ Positions scanned:     76
+ Resolved positions:    4
+ Total realized P&L:    $-84.04
+ Overall win rate:      0.0% (0/4)
+──────────────────────────────────────────────────────────────
+ Win rate by entry price (win = position P&L > 0)
+──────────────────────────────────────────────────────────────
+ Price          N     Win%            P&L
+ 0.0-0.1        2       0%       $-40.18
+ 0.3-0.4        1       0%       $-33.30
+ 0.4-0.5        1       0%       $-10.56
+══════════════════════════════════════════════════════════════
+```
+
+- **Resolved** = the market reports `closed=true` (CLOB). Markets that are past their listed end date but still accepting orders are *not* counted — Polymarket has not settled them.
+- **Realized P&L per position** = `realizedPnl + cashPnl` (profit locked in from earlier sells, plus the settled value of shares held to resolution). The total is the sum across resolved positions.
+- **Win** = a resolved position with positive total P&L. Buckets group positions by entry price (`avgPrice`) into deciles, so you can see whether buying cheap longshots or expensive favorites tends to pay off for this wallet.
+- All positions are pulled via `/positions?sizeThreshold=0` (so sold/settled positions aren't hidden); resolution is checked once per unique market, concurrently.
 
 ---
 
@@ -220,6 +250,7 @@ polytracker/
 ├── types.go         Data structures for API responses and alert payloads
 ├── api.go           HTTP client for Gamma, Data, and CLOB APIs (retry + backoff)
 ├── detector.go      Threshold detection, trade dedup, signal filters, scoring, enrichment
+├── history.go       wallet-history command: realized P&L + win rate by price bucket
 ├── alerter.go       Structured JSON alert output via slog
 ├── settings.json    Configuration file (edit this)
 └── go.mod           Module definition (stdlib only, no external deps)

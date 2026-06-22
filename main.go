@@ -26,6 +26,7 @@ func printUsage() {
 	fmt.Println("  help                             Show this help message")
 	fmt.Println("  track                            Start tracking all active markets for whale trades")
 	fmt.Println("  track --wallet=[WALLET_ID]       Start tracking trade history and new trades for a specific wallet ID")
+	fmt.Println("  wallet-history [WALLET_ID]       Show realized P&L and win rate by entry price across a wallet's resolved positions")
 	fmt.Println("\nFlags for 'track':")
 	fmt.Println("  --wallet=[WALLET_ID]             (Optional) Specific wallet address to track")
 }
@@ -51,20 +52,32 @@ func main() {
 		os.Exit(0)
 	}
 
-	if cmd != "track" {
+	var (
+		cmdFlag       string
+		walletID      string // track --wallet target
+		historyWallet string // wallet-history positional target
+	)
+
+	switch cmd {
+	case "track":
+		trackCmd := flag.NewFlagSet("track", flag.ExitOnError)
+		trackCmd.StringVar(&walletID, "wallet", "", "Specific wallet address to track")
+		_ = trackCmd.Parse(os.Args[2:])
+		cmdFlag = "track"
+		if walletID != "" {
+			cmdFlag = "track_wallet_" + walletID
+		}
+	case "wallet-history":
+		if len(os.Args) < 3 || strings.HasPrefix(os.Args[2], "-") {
+			fmt.Println("Usage: ./polytracker wallet-history <wallet>")
+			os.Exit(1)
+		}
+		historyWallet = os.Args[2]
+		cmdFlag = "wallet-history_" + historyWallet
+	default:
 		fmt.Printf("Unknown command: %s\n\n", cmd)
 		printUsage()
 		os.Exit(1)
-	}
-
-	trackCmd := flag.NewFlagSet("track", flag.ExitOnError)
-	var walletID string
-	trackCmd.StringVar(&walletID, "wallet", "", "Specific wallet address to track")
-	_ = trackCmd.Parse(os.Args[2:])
-
-	cmdFlag := "track"
-	if walletID != "" {
-		cmdFlag = "track_wallet_" + walletID
 	}
 
 	logFile, err := setupLogging(cmdFlag)
@@ -101,10 +114,18 @@ func main() {
 		cancel()
 	}()
 
-	if walletID != "" {
-		runWalletMode(ctx, client, detector, alerter, cfg, walletID)
-	} else {
-		runMarketMode(ctx, client, detector, alerter, cfg)
+	switch cmd {
+	case "wallet-history":
+		if err := RunWalletHistory(ctx, client, cfg, historyWallet); err != nil {
+			slog.Error("wallet history failed", "error", err)
+			os.Exit(1)
+		}
+	case "track":
+		if walletID != "" {
+			runWalletMode(ctx, client, detector, alerter, cfg, walletID)
+		} else {
+			runMarketMode(ctx, client, detector, alerter, cfg)
+		}
 	}
 }
 
