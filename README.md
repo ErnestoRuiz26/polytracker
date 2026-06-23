@@ -80,7 +80,9 @@ All settings live in **`settings.json`** alongside the binary. Edit this file to
   "min_score": 0,
   "gamma_base_url": "https://gamma-api.polymarket.com",
   "data_base_url": "https://data-api.polymarket.com",
-  "clob_base_url": "https://clob.polymarket.com"
+  "clob_base_url": "https://clob.polymarket.com",
+  "rate_limit_rps": 40,
+  "log_level": "warn"
 }
 ```
 
@@ -91,7 +93,7 @@ All settings live in **`settings.json`** alongside the binary. Edit this file to
 | `alert_threshold` | `0.05` | Trade/OI ratio to trigger alert (0.05 = 5%) |
 | `poll_interval` | `"60s"` | How often to check each market for new trades |
 | `market_refresh_interval` | `"5m"` | How often to rebuild the active market list |
-| `max_concurrency` | `10` | Max parallel API calls |
+| `max_concurrency` | `20` | Max parallel in-flight API calls |
 | `min_open_interest` | `10000` | Minimum open interest (USD) — markets below this are ignored |
 | `max_open_interest` | `0` | Maximum open interest (USD) — `0` means no upper limit |
 | `max_markets_per_cycle` | `500` | Cap on total markets to monitor |
@@ -105,6 +107,8 @@ All settings live in **`settings.json`** alongside the binary. Edit this file to
 | `gamma_base_url` | `"https://gamma-api.polymarket.com"` | Gamma API base URL |
 | `data_base_url` | `"https://data-api.polymarket.com"` | Data API base URL |
 | `clob_base_url` | `"https://clob.polymarket.com"` | CLOB API base URL |
+| `rate_limit_rps` | `40` | Global cap on API requests per second. The biggest lever on startup speed — building the market list issues one `/oi` call per market (~500), so a higher value finishes the OI sweep faster. Lower it if you hit `429`s. |
+| `log_level` | `"warn"` | Operational-log verbosity on **stderr**: `debug`, `info`, `warn`, `error`. Default `warn` keeps the terminal quiet so the readable whale summaries on **stdout** stand out. Set `info` to watch the polling lifecycle. |
 
 Duration fields accept Go duration strings: `"30s"`, `"2m"`, `"1h30m"`, etc.
 
@@ -134,6 +138,8 @@ For containerized deployments, every setting can be overridden via environment v
 | `PT_GAMMA_URL` | `gamma_base_url` |
 | `PT_DATA_URL` | `data_base_url` |
 | `PT_CLOB_URL` | `clob_base_url` |
+| `PT_RATE_LIMIT_RPS` | `rate_limit_rps` |
+| `PT_LOG_LEVEL` | `log_level` |
 | `PT_SETTINGS_FILE` | Path to settings file (default: `settings.json`) |
 
 ### Example Configurations

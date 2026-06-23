@@ -41,6 +41,13 @@ func main() {
 		"  >> Polymarket Whale Tracker\n"
 	fmt.Println(banner)
 
+	// Bootstrap a quiet stderr logger so config loading (which happens before
+	// setupLogging) doesn't emit INFO noise. setupLogging resets this to the
+	// configured level once the config is known.
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelWarn,
+	})))
+
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
@@ -80,14 +87,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	logFile, err := setupLogging(cmdFlag)
+	// Load config first so its log_level governs operational verbosity. The
+	// bootstrap handler above keeps LoadConfig's own messages quiet by default.
+	cfg := LoadConfig()
+
+	logFile, err := setupLogging(cmdFlag, cfg.LogLevel)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to setup logging: %v\n", err)
 		os.Exit(1)
 	}
 	defer logFile.Close()
 
-	cfg := LoadConfig()
 	client := NewClient(cfg)
 	defer client.Close()
 	detector := NewDetector(client, cfg)
@@ -462,9 +472,24 @@ func cleanOldLogs(logDir string, maxLogs int) error {
 	return nil
 }
 
-// setupLogging configures human-readable logging on stderr and creates the
-// session log file under logs/.
-func setupLogging(cmdFlag string) (*os.File, error) {
+// parseLogLevel maps a config string to an slog.Level, defaulting to WARN for
+// empty or unrecognized values so the terminal stays quiet by default.
+func parseLogLevel(s string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelWarn
+	}
+}
+
+// setupLogging configures human-readable logging on stderr (at the given level)
+// and creates the session log file under logs/.
+func setupLogging(cmdFlag, logLevel string) (*os.File, error) {
 	logDir := "logs"
 	maxLogs := 20
 
@@ -483,9 +508,9 @@ func setupLogging(cmdFlag string) (*os.File, error) {
 		return nil, fmt.Errorf("open log file: %w", err)
 	}
 
-	// 3. Configure stderr to use human-readable TextHandler
+	// 3. Configure stderr to use human-readable TextHandler at the chosen level.
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: parseLogLevel(logLevel),
 	})))
 
 	slog.Info("logging configured", "log_file", logFilePath)

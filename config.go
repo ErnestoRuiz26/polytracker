@@ -83,6 +83,12 @@ type Config struct {
 
 	// RateLimitRPS caps the total requests per second made by the client.
 	RateLimitRPS int `json:"rate_limit_rps"`
+
+	// LogLevel sets the verbosity of operational logs on stderr: "debug",
+	// "info", "warn", or "error". Default "warn" keeps the terminal quiet so the
+	// readable whale summaries on stdout stand out; raise it to "info"/"debug"
+	// to see the polling lifecycle.
+	LogLevel string `json:"log_level"`
 }
 
 // ScoreWeights holds the per-signal weights for the composite signalScore.
@@ -159,14 +165,15 @@ func defaults() *Config {
 		AlertThreshold:        0.05,
 		PollInterval:          Duration{60 * time.Second},
 		MarketRefreshInterval: Duration{5 * time.Minute},
-		MaxConcurrency:        10,
+		MaxConcurrency:        20,
 		MinOpenInterest:       10000,
 		MaxOpenInterest:       0,
 		MaxMarketsPerCycle:    500,
 		GammaBaseURL:          "https://gamma-api.polymarket.com",
 		DataBaseURL:           "https://data-api.polymarket.com",
 		CLOBBaseURL:           "https://clob.polymarket.com",
-		RateLimitRPS:          10,
+		RateLimitRPS:          40,
+		LogLevel:              "warn",
 		ScoreWeights: ScoreWeights{
 			Size:   0.40,
 			Room:   0.15,
@@ -203,6 +210,7 @@ func applyEnvOverrides(cfg *Config) {
 	envStrInto("PT_DATA_URL", &cfg.DataBaseURL)
 	envStrInto("PT_CLOB_URL", &cfg.CLOBBaseURL)
 	envInt("PT_RATE_LIMIT_RPS", &cfg.RateLimitRPS)
+	envStrInto("PT_LOG_LEVEL", &cfg.LogLevel)
 }
 
 // --- env helpers: each assigns to *dst only when the var is set and parses ---

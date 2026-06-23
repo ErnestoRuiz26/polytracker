@@ -16,8 +16,23 @@ func TestDefaults(t *testing.T) {
 	if cfg.MarketRefreshInterval.Duration != 5*time.Minute {
 		t.Errorf("MarketRefreshInterval = %v, want 5m", cfg.MarketRefreshInterval.Duration)
 	}
-	if cfg.MaxConcurrency != 10 || cfg.RateLimitRPS != 10 {
+	if cfg.MaxConcurrency != 20 || cfg.RateLimitRPS != 40 {
 		t.Errorf("concurrency/rps mismatch: %+v", cfg)
+	}
+	if cfg.LogLevel != "warn" {
+		t.Errorf("LogLevel = %q, want warn", cfg.LogLevel)
+	}
+}
+
+func TestParseLogLevel(t *testing.T) {
+	tests := map[string]int{
+		"debug": -4, "info": 0, "warn": 4, "error": 8,
+		"WARN": 4, "": 4, "garbage": 4, " info ": 0,
+	}
+	for in, want := range tests {
+		if got := int(parseLogLevel(in)); got != want {
+			t.Errorf("parseLogLevel(%q) = %d, want %d", in, got, want)
+		}
 	}
 }
 
