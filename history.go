@@ -142,16 +142,22 @@ func uniqueConditionIDs(positions []Position) []string {
 func RunWalletHistory(ctx context.Context, client *Client, cfg *Config, wallet string) error {
 	slog.Info("computing wallet history", "wallet", wallet)
 
+	sp := startSpinner("Fetching positions…")
 	positions, err := client.FetchAllPositions(ctx, wallet)
 	if err != nil {
+		sp.Stop("")
 		return fmt.Errorf("fetch positions: %w", err)
 	}
+	sp.Stop(fmt.Sprintf("Fetched %d positions.", len(positions)))
 	if len(positions) == 0 {
 		fmt.Printf("No positions found for wallet %s\n", wallet)
 		return nil
 	}
 
-	closed := resolveClosedMarkets(ctx, client, uniqueConditionIDs(positions), cfg.MaxConcurrency)
+	conditionIDs := uniqueConditionIDs(positions)
+	sp = startSpinner(fmt.Sprintf("Checking resolution for %d markets…", len(conditionIDs)))
+	closed := resolveClosedMarkets(ctx, client, conditionIDs, cfg.MaxConcurrency)
+	sp.Stop("")
 
 	var resolved []Position
 	for _, p := range positions {

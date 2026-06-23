@@ -214,12 +214,17 @@ func runWalletMode(ctx context.Context, client *Client, detector *Detector, aler
 // runMarketMode monitors all active markets, refreshing the tracked-market list
 // on its own interval and polling each market for whale trades.
 func runMarketMode(ctx context.Context, client *Client, detector *Detector, alerter *Alerter, cfg *Config) {
-	// Bootstrap: fetch markets before entering the main loop.
+	// Bootstrap: fetch markets before entering the main loop. This issues one
+	// OI call per market and can take ~10s+, so show progress — operational logs
+	// are quiet by default and the wait would otherwise look like a freeze.
+	sp := startSpinner("Loading active markets (fetching open interest)…")
 	markets, err := refreshMarkets(ctx, client, cfg)
 	if err != nil {
+		sp.Stop("")
 		slog.Error("initial market fetch failed", "error", err)
 		os.Exit(1)
 	}
+	sp.Stop(fmt.Sprintf("Loaded %d markets. Watching for whale trades…", len(markets)))
 	slog.Info("markets loaded", "count", len(markets))
 
 	// Bail immediately if we were cancelled during the (slow) market load.
