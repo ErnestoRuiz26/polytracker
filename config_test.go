@@ -16,7 +16,7 @@ func TestDefaults(t *testing.T) {
 	if cfg.MarketRefreshInterval.Duration != 5*time.Minute {
 		t.Errorf("MarketRefreshInterval = %v, want 5m", cfg.MarketRefreshInterval.Duration)
 	}
-	if cfg.MaxConcurrency != 20 || cfg.RateLimitRPS != 40 {
+	if cfg.MaxConcurrency != 10 || cfg.RateLimitRPS != 10 {
 		t.Errorf("concurrency/rps mismatch: %+v", cfg)
 	}
 	if cfg.LogLevel != "warn" {

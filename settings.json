@@ -2,7 +2,7 @@
   "alert_threshold": 0.08,
   "poll_interval": "60s",
   "market_refresh_interval": "5m",
-  "max_concurrency": 20,
+  "max_concurrency": 10,
   "min_open_interest": 10000,
   "max_open_interest": 0,
   "max_markets_per_cycle": 500,
@@ -21,6 +21,6 @@
   "gamma_base_url": "https://gamma-api.polymarket.com",
   "data_base_url": "https://data-api.polymarket.com",
   "clob_base_url": "https://clob.polymarket.com",
-  "rate_limit_rps": 40,
+  "rate_limit_rps": 10,
   "log_level": "warn"
 }

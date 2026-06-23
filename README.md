@@ -81,7 +81,7 @@ All settings live in **`settings.json`** alongside the binary. Edit this file to
   "gamma_base_url": "https://gamma-api.polymarket.com",
   "data_base_url": "https://data-api.polymarket.com",
   "clob_base_url": "https://clob.polymarket.com",
-  "rate_limit_rps": 40,
+  "rate_limit_rps": 10,
   "log_level": "warn"
 }
 ```
@@ -93,7 +93,7 @@ All settings live in **`settings.json`** alongside the binary. Edit this file to
 | `alert_threshold` | `0.05` | Trade/OI ratio to trigger alert (0.05 = 5%) |
 | `poll_interval` | `"60s"` | How often to check each market for new trades |
 | `market_refresh_interval` | `"5m"` | How often to rebuild the active market list |
-| `max_concurrency` | `20` | Max parallel in-flight API calls |
+| `max_concurrency` | `10` | Max parallel in-flight API calls |
 | `min_open_interest` | `10000` | Minimum open interest (USD) — markets below this are ignored |
 | `max_open_interest` | `0` | Maximum open interest (USD) — `0` means no upper limit |
 | `max_markets_per_cycle` | `500` | Cap on total markets to monitor |
@@ -107,7 +107,7 @@ All settings live in **`settings.json`** alongside the binary. Edit this file to
 | `gamma_base_url` | `"https://gamma-api.polymarket.com"` | Gamma API base URL |
 | `data_base_url` | `"https://data-api.polymarket.com"` | Data API base URL |
 | `clob_base_url` | `"https://clob.polymarket.com"` | CLOB API base URL |
-| `rate_limit_rps` | `40` | Global cap on API requests per second. The biggest lever on startup speed — building the market list issues one `/oi` call per market (~500), so a higher value finishes the OI sweep faster. Lower it if you hit `429`s. |
+| `rate_limit_rps` | `10` | Global cap on API requests per second. Polymarket's Data API rate-limits bursts, so `10` is the tested-stable default. Raising it speeds the startup OI sweep (one `/oi` call per market) but risks `429`s under the poll fan-out; `429`s are retried honoring the server's `Retry-After`. |
 | `log_level` | `"warn"` | Operational-log verbosity on **stderr**: `debug`, `info`, `warn`, `error`. Default `warn` keeps the terminal quiet so the readable whale summaries on **stdout** stand out. Set `info` to watch the polling lifecycle. |
 
 Duration fields accept Go duration strings: `"30s"`, `"2m"`, `"1h30m"`, etc.
@@ -279,7 +279,7 @@ The service is designed to be API-friendly:
 - **Concurrency is bounded** by a semaphore pool (`max_concurrency`, default 10)
 - **Expensive calls** (midpoint, order book, holders, positions) only fire on flagged trades, not every market
 - **Failed requests** retry with exponential backoff (500ms → 1s → 2s, max 3 attempts)
-- **429/5xx responses** are retried automatically; 4xx errors fail immediately
+- **429/5xx responses** are retried automatically; on a `429` the server's `Retry-After` hint (capped at 10s) overrides the backoff. 4xx errors fail immediately
 
 ---
 

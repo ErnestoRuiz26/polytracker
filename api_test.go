@@ -8,7 +8,31 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
+
+func TestParseRetryAfter(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want time.Duration
+	}{
+		{"empty", "", 0},
+		{"seconds", "3", 3 * time.Second},
+		{"zero seconds", "0", 0},
+		{"whitespace", "  5 ", 5 * time.Second},
+		{"clamped to max", "600", maxRetryAfter},
+		{"garbage", "soon", 0},
+		{"negative", "-4", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseRetryAfter(tt.in); got != tt.want {
+				t.Errorf("parseRetryAfter(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestShortID(t *testing.T) {
 	tests := []struct {

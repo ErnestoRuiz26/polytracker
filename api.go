@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -31,6 +32,41 @@ const (
 // than being retried, so getJSON's retry loop can branch on classification
 // instead of re-inspecting status codes.
 var errNonRetryable = errors.New("non-retryable response")
+
+// maxRetryAfter caps how long we'll honor a server's Retry-After hint, so a
+// hostile or buggy header can't park a whole poll cycle for minutes.
+const maxRetryAfter = 10 * time.Second
+
+// retryAfterError carries the server's Retry-After delay on a 429 so getJSON's
+// backoff can wait exactly as long as asked instead of guessing.
+type retryAfterError struct{ delay time.Duration }
+
+func (e *retryAfterError) Error() string {
+	return fmt.Sprintf("rate limited, retry after %s", e.delay)
+}
+
+// parseRetryAfter reads a Retry-After header value (delta-seconds or HTTP-date)
+// into a duration. Returns 0 when absent/unparseable so callers fall back to
+// exponential backoff. The result is clamped to maxRetryAfter.
+func parseRetryAfter(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	var d time.Duration
+	if secs, err := strconv.Atoi(v); err == nil && secs >= 0 {
+		d = time.Duration(secs) * time.Second
+	} else if t, err := http.ParseTime(v); err == nil {
+		d = time.Until(t)
+	}
+	if d < 0 {
+		return 0
+	}
+	if d > maxRetryAfter {
+		return maxRetryAfter
+	}
+	return d
+}
 
 // shortID truncates an identifier for log/error messages without risking an
 // out-of-range slice on short or malformed IDs.
@@ -324,8 +360,13 @@ func (c *Client) getJSON(ctx context.Context, rawURL string, dest any) error {
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
-			// Exponential backoff: 500ms, 1s, 2s
+			// Exponential backoff: 500ms, 1s, 2s — unless the server sent a
+			// Retry-After on a 429, in which case honor that instead.
 			delay := time.Duration(float64(baseRetryDelay) * math.Pow(2, float64(attempt-1)))
+			var ra *retryAfterError
+			if errors.As(lastErr, &ra) && ra.delay > 0 {
+				delay = ra.delay
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -388,8 +429,16 @@ func (c *Client) doRequest(ctx context.Context, rawURL string, dest any) error {
 		return fmt.Errorf("read body: %w", err)
 	}
 
-	// Retry on server errors and rate limits.
-	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+	// Rate limited: retryable, and carry the server's Retry-After hint so the
+	// backoff waits exactly as long as requested.
+	if resp.StatusCode == http.StatusTooManyRequests {
+		if d := parseRetryAfter(resp.Header.Get("Retry-After")); d > 0 {
+			return fmt.Errorf("HTTP 429 from %s: %w", rawURL, &retryAfterError{d})
+		}
+		return fmt.Errorf("HTTP 429 from %s", rawURL)
+	}
+	// Other server errors are retryable with plain backoff.
+	if resp.StatusCode >= 500 {
 		return fmt.Errorf("HTTP %d from %s", resp.StatusCode, rawURL)
 	}
 	// Other non-200s are client errors — fail fast.
