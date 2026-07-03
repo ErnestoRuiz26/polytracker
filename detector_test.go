@@ -335,3 +335,33 @@ func TestSetWalletCheckpoint(t *testing.T) {
 		t.Fatalf("checkpoint = %d, want 250", got)
 	}
 }
+
+func TestComputeWalletStats(t *testing.T) {
+	positions := []Position{
+		{RealizedPnl: 100, CashPnl: 0},   // win
+		{RealizedPnl: 0, CashPnl: -40},   // loss
+		{RealizedPnl: 25, CashPnl: 25},   // win
+		{RealizedPnl: 0, CashPnl: 0},     // undecided — excluded from win rate
+		{RealizedPnl: 0.005, CashPnl: 0}, // below minDecidedPnl — undecided
+	}
+	s := computeWalletStats(positions)
+	if s.Positions != 5 {
+		t.Errorf("Positions = %d, want 5", s.Positions)
+	}
+	if s.Decided != 3 {
+		t.Errorf("Decided = %d, want 3", s.Decided)
+	}
+	if want := 2.0 / 3.0; s.WinRate != want {
+		t.Errorf("WinRate = %v, want %v", s.WinRate, want)
+	}
+	if want := 110.005; s.TotalPnl != want {
+		t.Errorf("TotalPnl = %v, want %v", s.TotalPnl, want)
+	}
+}
+
+func TestComputeWalletStatsEmpty(t *testing.T) {
+	s := computeWalletStats(nil)
+	if s.Positions != 0 || s.Decided != 0 || s.WinRate != 0 || s.TotalPnl != 0 {
+		t.Errorf("empty stats not zeroed: %+v", s)
+	}
+}

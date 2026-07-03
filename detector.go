@@ -32,7 +32,26 @@ type Detector struct {
 	mu         sync.Mutex
 	seenMarket map[string]int64
 	seenWallet map[string]int64
+
+	// statsCache memoizes per-wallet track records so repeated alerts from the
+	// same whale don't re-paginate its entire position book every time.
+	statsMu    sync.Mutex
+	statsCache map[string]walletStatsEntry
 }
+
+// walletStatsEntry is a cached track-record lookup. stats is nil for a failed
+// lookup (negative cache) so a flaky wallet doesn't get re-fetched every alert.
+type walletStatsEntry struct {
+	stats     *WalletStatsInfo
+	fetchedAt time.Time
+}
+
+const (
+	// walletStatsTTL is how long a successful track-record lookup stays fresh.
+	walletStatsTTL = time.Hour
+	// walletStatsErrTTL is the negative-cache window after a failed lookup.
+	walletStatsErrTTL = 10 * time.Minute
+)
 
 // NewDetector creates a Detector with empty seen-trade caches.
 func NewDetector(client *Client, cfg *Config) *Detector {
@@ -41,6 +60,7 @@ func NewDetector(client *Client, cfg *Config) *Detector {
 		config:     cfg,
 		seenMarket: make(map[string]int64),
 		seenWallet: make(map[string]int64),
+		statsCache: make(map[string]walletStatsEntry),
 	}
 }
 
@@ -356,6 +376,10 @@ func (d *Detector) enrichTrade(ctx context.Context, market Market, trade Trade, 
 		slog.Debug("holders fetch failed", "error", err)
 	}
 
+	// Attach the wallet's overall track record (best-effort, cached) so the
+	// alert reader can judge whether this whale has been worth copying.
+	alert.Context.WalletStats = d.walletStats(ctx, trade.ProxyWallet)
+
 	// Classify open vs close from the wallet's current position (best-effort).
 	// On failure the alert keeps the UNKNOWN default set in buildBaseAlert.
 	if positions, err := d.client.FetchPositions(ctx, trade.ProxyWallet, market.ConditionID); err == nil {
@@ -382,6 +406,71 @@ func (d *Detector) enrichTrade(ctx context.Context, market Market, trade Trade, 
 	d.scoreAlert(&alert)
 
 	return alert, nil
+}
+
+// minDecidedPnl is the absolute P&L below which a position is considered
+// undecided (e.g. just opened, price hasn't moved) and excluded from the
+// win-rate sample so fresh positions don't dilute the rate.
+const minDecidedPnl = 0.01
+
+// computeWalletStats tallies a wallet's overall track record from its full
+// position snapshot. P&L includes unrealized gains on open positions — the
+// goal is "has this wallet made money", not accounting-grade realization.
+func computeWalletStats(positions []Position) *WalletStatsInfo {
+	s := &WalletStatsInfo{Positions: len(positions)}
+	wins := 0
+	for i := range positions {
+		pnl := positions[i].TotalPnl()
+		s.TotalPnl += pnl
+		if pnl > minDecidedPnl {
+			wins++
+			s.Decided++
+		} else if pnl < -minDecidedPnl {
+			s.Decided++
+		}
+	}
+	if s.Decided > 0 {
+		s.WinRate = float64(wins) / float64(s.Decided)
+	}
+	return s
+}
+
+// walletStats returns the wallet's cached track record, fetching and caching
+// it on a miss. Returns nil when the lookup fails; failures are negative-cached
+// so a broken wallet doesn't add a full pagination to every poll cycle.
+func (d *Detector) walletStats(ctx context.Context, wallet string) *WalletStatsInfo {
+	if wallet == "" {
+		return nil
+	}
+
+	key := strings.ToLower(wallet)
+	now := time.Now()
+
+	d.statsMu.Lock()
+	if e, ok := d.statsCache[key]; ok {
+		ttl := walletStatsTTL
+		if e.stats == nil {
+			ttl = walletStatsErrTTL
+		}
+		if now.Sub(e.fetchedAt) < ttl {
+			d.statsMu.Unlock()
+			return e.stats
+		}
+	}
+	d.statsMu.Unlock()
+
+	positions, err := d.client.FetchAllPositions(ctx, wallet)
+	var stats *WalletStatsInfo
+	if err != nil {
+		slog.Debug("wallet stats fetch failed", "wallet", shortID(wallet), "error", err)
+	} else {
+		stats = computeWalletStats(positions)
+	}
+
+	d.statsMu.Lock()
+	d.statsCache[key] = walletStatsEntry{stats: stats, fetchedAt: now}
+	d.statsMu.Unlock()
+	return stats
 }
 
 // buildBaseAlert creates the alert struct with data we already have,

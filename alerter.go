@@ -66,8 +66,16 @@ func printSummary(alert WhaleTrade) {
 		fmt.Printf("Position action:       %s (avg entry %.3f, realized P&L $%.2f)\n",
 			alert.Context.PositionAction, alert.Context.WalletAvgPrice, alert.Context.WalletRealizedPnl)
 	}
+	if ws := alert.Context.WalletStats; ws != nil && ws.Decided > 0 {
+		fmt.Printf("Whale track record:    $%+.2f P&L, %.0f%% win rate (%d/%d decided positions)\n",
+			ws.TotalPnl, ws.WinRate*100, ws.Decided, ws.Positions)
+	}
 	fmt.Printf("Predicted outcome:     %s\n", alert.Trade.Outcome)
 	fmt.Printf("Entry price:           %.3f  (room to 1.0: %.3f)\n", alert.Trade.Price, alert.Context.PriceRoom)
+	if mid := alert.Context.CurrentMidpoint; mid > 0 {
+		fmt.Printf("Current midpoint:      %.3f  (drift since whale entry: %+.3f)\n",
+			mid, mid-alert.Trade.Price)
+	}
 	if alert.Context.TimeToResolutionDays != 0 {
 		fmt.Printf("Resolves in:           %.1f days\n", alert.Context.TimeToResolutionDays)
 	}

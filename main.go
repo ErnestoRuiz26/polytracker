@@ -27,6 +27,7 @@ func printUsage() {
 	fmt.Println("  track                            Start tracking all active markets for whale trades")
 	fmt.Println("  track --wallet=[WALLET_ID]       Start tracking trade history and new trades for a specific wallet ID")
 	fmt.Println("  wallet-history [WALLET_ID]       Show realized P&L and win rate by entry price across a wallet's resolved positions")
+	fmt.Println("  compare [WALLET_ID] [WALLET_ID]… Rank wallets by realized P&L / win rate / ROI to decide which are worth copying")
 	fmt.Println("\nFlags for 'track':")
 	fmt.Println("  --wallet=[WALLET_ID]             (Optional) Specific wallet address to track")
 }
@@ -60,9 +61,10 @@ func main() {
 	}
 
 	var (
-		cmdFlag       string
-		walletID      string // track --wallet target
-		historyWallet string // wallet-history positional target
+		cmdFlag        string
+		walletID       string   // track --wallet target
+		historyWallet  string   // wallet-history positional target
+		compareWallets []string // compare positional targets
 	)
 
 	switch cmd {
@@ -81,6 +83,19 @@ func main() {
 		}
 		historyWallet = os.Args[2]
 		cmdFlag = "wallet-history_" + historyWallet
+	case "compare":
+		if len(os.Args) < 4 {
+			fmt.Println("Usage: ./polytracker compare <wallet> <wallet> [wallet…]")
+			os.Exit(1)
+		}
+		for _, a := range os.Args[2:] {
+			if strings.HasPrefix(a, "-") {
+				fmt.Println("Usage: ./polytracker compare <wallet> <wallet> [wallet…]")
+				os.Exit(1)
+			}
+			compareWallets = append(compareWallets, a)
+		}
+		cmdFlag = "compare"
 	default:
 		fmt.Printf("Unknown command: %s\n\n", cmd)
 		printUsage()
@@ -97,6 +112,8 @@ func main() {
 		os.Exit(1)
 	}
 	defer logFile.Close()
+
+	cfg.PrintSettings()
 
 	client := NewClient(cfg)
 	defer client.Close()
@@ -128,6 +145,11 @@ func main() {
 	case "wallet-history":
 		if err := RunWalletHistory(ctx, client, cfg, historyWallet); err != nil {
 			slog.Error("wallet history failed", "error", err)
+			os.Exit(1)
+		}
+	case "compare":
+		if err := RunWalletCompare(ctx, client, cfg, compareWallets); err != nil {
+			slog.Error("wallet compare failed", "error", err)
 			os.Exit(1)
 		}
 	case "track":
@@ -386,6 +408,10 @@ func runPollCycle(ctx context.Context, detector *Detector, alerter *Alerter, mar
 	// Don't emit summary if we're shutting down — it would be misleading.
 	if ctx.Err() == nil {
 		alerter.EmitSummary(len(markets), len(allAlerts))
+		// Terminal heartbeat: EmitSummary only reaches the log file, so without
+		// this the terminal stays silent between alerts and looks frozen.
+		fmt.Printf("[%s] checked %d markets, %d alert(s)\n",
+			time.Now().Format("15:04:05"), len(markets), len(allAlerts))
 	}
 }
 
@@ -401,6 +427,10 @@ func runWalletPollCycle(ctx context.Context, detector *Detector, alerter *Alerte
 		return
 	}
 	emitAll(alerter, alerts)
+	if ctx.Err() == nil {
+		fmt.Printf("[%s] checked wallet %s, %d new trade(s)\n",
+			time.Now().Format("15:04:05"), shortID(walletID), len(alerts))
+	}
 }
 
 // sortAlertsDesc orders alerts by trade execution timestamp, newest first.

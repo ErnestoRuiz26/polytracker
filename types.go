@@ -160,6 +160,18 @@ type Position struct {
 	CashPnl     float64 `json:"cashPnl"`
 	CurPrice    float64 `json:"curPrice"`
 	Title       string  `json:"title"`
+
+	// InitialValue is the USD cost basis of the shares still held; TotalBought
+	// is the cumulative number of shares ever bought (including ones since sold).
+	// avgPrice × totalBought approximates the total USD ever put into the
+	// position, which is the denominator for ROI.
+	InitialValue float64 `json:"initialValue"`
+	TotalBought  float64 `json:"totalBought"`
+}
+
+// InvestedUSD estimates the total dollars ever committed to this position.
+func (p *Position) InvestedUSD() float64 {
+	return p.AvgPrice * p.TotalBought
 }
 
 // TotalPnl is the position's full P&L: profit locked in from earlier sells
@@ -268,10 +280,27 @@ type WhaleContext struct {
 	WalletRealizedPnl  float64 `json:"walletRealizedPnl,omitempty"`
 	WalletPositionSize float64 `json:"walletPositionSize,omitempty"`
 
+	// WalletStats is the trading wallet's overall track record (all positions,
+	// realized + unrealized), fetched best-effort and cached. Nil when the
+	// lookup failed — the alert still fires without it.
+	WalletStats *WalletStatsInfo `json:"walletStats,omitempty"`
+
 	// SignalScore is the composite 0-100 signal strength (see computeScore).
 	// ScoreBreakdown holds the individual [0,1] sub-scores for tuning/debug.
 	SignalScore    float64            `json:"signalScore"`
 	ScoreBreakdown map[string]float64 `json:"scoreBreakdown,omitempty"`
+}
+
+// WalletStatsInfo summarizes a wallet's overall Polymarket track record so an
+// alert reader can judge whether the whale is worth copying. Derived from the
+// full /positions snapshot: P&L counts realized plus unrealized, and a "win"
+// is any position with positive total P&L (positions with ~zero P&L — e.g.
+// just opened — are excluded from the win-rate sample).
+type WalletStatsInfo struct {
+	TotalPnl  float64 `json:"totalPnl"`
+	WinRate   float64 `json:"winRate"` // 0-1 over decided positions
+	Decided   int     `json:"decidedPositions"`
+	Positions int     `json:"totalPositions"`
 }
 
 // ---------------------------------------------------------------------------
@@ -298,6 +327,8 @@ type WalletHistory struct {
 	Wins             int           `json:"wins"`
 	OverallWinRate   float64       `json:"overallWinRate"` // 0-1
 	TotalRealizedPnl float64       `json:"totalRealizedPnl"`
+	TotalInvested    float64       `json:"totalInvested"` // sum of estimated USD committed
+	ROI              float64       `json:"roi"`           // TotalRealizedPnl / TotalInvested, 0 when invested unknown
 	Buckets          []PriceBucket `json:"buckets"`
 }
 

@@ -105,3 +105,43 @@ func TestUniqueConditionIDs(t *testing.T) {
 		t.Errorf("ids = %v, want [0xA 0xB]", got)
 	}
 }
+
+func TestWalletVerdict(t *testing.T) {
+	tests := []struct {
+		name string
+		h    WalletHistory
+		want string
+	}{
+		{"too few resolved", WalletHistory{ResolvedCount: 5, TotalRealizedPnl: 500, OverallWinRate: 0.9}, "LOW SAMPLE"},
+		{"profitable strong rate", WalletHistory{ResolvedCount: 50, TotalRealizedPnl: 500, OverallWinRate: 0.60}, "WATCH"},
+		{"profitable weak rate", WalletHistory{ResolvedCount: 50, TotalRealizedPnl: 500, OverallWinRate: 0.40}, "OK"},
+		{"unprofitable low rate", WalletHistory{ResolvedCount: 50, TotalRealizedPnl: -500, OverallWinRate: 0.30}, "AVOID"},
+		{"unprofitable mid rate", WalletHistory{ResolvedCount: 50, TotalRealizedPnl: -500, OverallWinRate: 0.50}, "SKIP"},
+	}
+	for _, tt := range tests {
+		if got := walletVerdict(tt.h); got != tt.want {
+			t.Errorf("%s: walletVerdict = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestAggregateHistoryROI(t *testing.T) {
+	positions := []Position{
+		{AvgPrice: 0.5, TotalBought: 100, RealizedPnl: 25, CashPnl: 0},  // invested 50, +25
+		{AvgPrice: 0.2, TotalBought: 250, RealizedPnl: 0, CashPnl: -50}, // invested 50, -50
+	}
+	h := aggregateHistory("0xW", positions)
+	if h.TotalInvested != 100 {
+		t.Errorf("TotalInvested = %v, want 100", h.TotalInvested)
+	}
+	if want := -25.0 / 100.0; math.Abs(h.ROI-want) > 1e-9 {
+		t.Errorf("ROI = %v, want %v", h.ROI, want)
+	}
+}
+
+func TestAggregateHistoryROIZeroInvested(t *testing.T) {
+	h := aggregateHistory("0xW", []Position{{RealizedPnl: 10}})
+	if h.ROI != 0 {
+		t.Errorf("ROI = %v, want 0 when invested unknown", h.ROI)
+	}
+}

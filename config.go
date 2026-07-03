@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
@@ -157,6 +158,33 @@ func LoadConfig() *Config {
 	applyEnvOverrides(cfg)
 
 	return cfg
+}
+
+// PrintSettings writes the effective (post-file, post-env) config to stdout
+// once at startup so the operator can confirm what the run is using.
+func (cfg *Config) PrintSettings() {
+	maxOI := "disabled"
+	if cfg.MaxOpenInterest > 0 {
+		maxOI = fmt.Sprintf("$%.0f", cfg.MaxOpenInterest)
+	}
+	minScore := "disabled"
+	if cfg.MinScore > 0 {
+		minScore = fmt.Sprintf("%.0f", cfg.MinScore)
+	}
+
+	fmt.Println("Effective settings:")
+	fmt.Printf("  alert_threshold:          %.1f%% of OI\n", cfg.AlertThreshold*100)
+	fmt.Printf("  poll_interval:            %s\n", cfg.PollInterval.Duration)
+	fmt.Printf("  market_refresh_interval:  %s\n", cfg.MarketRefreshInterval.Duration)
+	fmt.Printf("  open_interest window:     min $%.0f / max %s\n", cfg.MinOpenInterest, maxOI)
+	fmt.Printf("  max_markets_per_cycle:    %d\n", cfg.MaxMarketsPerCycle)
+	fmt.Printf("  max_concurrency:          %d\n", cfg.MaxConcurrency)
+	fmt.Printf("  rate_limit_rps:           %d\n", cfg.RateLimitRPS)
+	fmt.Printf("  min_score gate:           %s\n", minScore)
+	fmt.Printf("  score_weights:            size %.2f room %.2f time %.2f action %.2f\n",
+		cfg.ScoreWeights.Size, cfg.ScoreWeights.Room, cfg.ScoreWeights.Time, cfg.ScoreWeights.Action)
+	fmt.Printf("  log_level:                %s\n", cfg.LogLevel)
+	fmt.Println()
 }
 
 // defaults returns a Config with sensible built-in values.

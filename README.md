@@ -25,6 +25,9 @@ go build -o polytracker .
 
 # Summarize a wallet's realized P&L and win rate across resolved positions
 ./polytracker wallet-history 0xd81fbc5c53593e4e2923a641ff2bc7e2d9866b75
+
+# Rank several wallets side by side to decide which are worth copying
+./polytracker compare 0xWALLET_A 0xWALLET_B 0xWALLET_C
 ```
 
 When tracking a specific wallet, the tool retrieves and paginates historical trades 10 at a time (sorted latest to oldest). Pressing `[Enter]` transitions to real-time tracking, polling every `poll_interval`. Log files are saved under `logs/` with names following `session_command_flag_DATE_TIME.log`.
@@ -55,6 +58,25 @@ Prints a one-shot summary of a wallet's **realized P&L** and **win rate by entry
 - **Realized P&L per position** = `realizedPnl + cashPnl` (profit locked in from earlier sells, plus the settled value of shares held to resolution). The total is the sum across resolved positions.
 - **Win** = a resolved position with positive total P&L. Buckets group positions by entry price (`avgPrice`) into deciles, so you can see whether buying cheap longshots or expensive favorites tends to pay off for this wallet.
 - All positions are pulled via `/positions?sizeThreshold=0` (so sold/settled positions aren't hidden); resolution is checked once per unique market, concurrently.
+- **ROI** = total realized P&L ÷ estimated total invested (`avgPrice × totalBought` summed over resolved positions).
+
+### `compare <wallet> <wallet> [wallet…]`
+
+Builds the same resolved-position history for each wallet and prints a table ranked by realized P&L, with a copy-worthiness verdict:
+
+```
+════════════════════════════════════════════════════════════════════════════════
+ Wallet comparison — ranked by realized P&L (resolved positions only)
+════════════════════════════════════════════════════════════════════════════════
+ Wallet                Resolved   Win%            P&L      ROI  Verdict
+────────────────────────────────────────────────────────────────────────────────
+ 0xa1b2c3d4e5f6a7           142    61%     $+12480.55   +23.4%  WATCH
+ 0x0152d72b39ad3a             5     0%         $-6.00  -100.0%  LOW SAMPLE
+ 0x3a3319a27c1cac            34     0%        $-75.39  -100.0%  AVOID
+════════════════════════════════════════════════════════════════════════════════
+```
+
+Verdicts: **WATCH** = profitable with ≥55% win rate over ≥20 resolved bets — worth tracking live (`track --wallet=…`). **OK** = profitable but weaker win rate. **SKIP / AVOID** = unprofitable. **LOW SAMPLE** = fewer than 20 resolved bets, not enough evidence either way.
 
 ---
 
@@ -227,6 +249,12 @@ Each whale trade is recorded two ways: a single-line structured JSON object (one
     "walletAvgPrice": 0.63,
     "walletRealizedPnl": 0,
     "walletPositionSize": 50000,
+    "walletStats": {
+      "totalPnl": 48210.33,
+      "winRate": 0.61,
+      "decidedPositions": 142,
+      "totalPositions": 180
+    },
     "signalScore": 73.5,
     "scoreBreakdown": {
       "size": 0.80,
@@ -243,6 +271,7 @@ Each whale trade is recorded two ways: a single-line structured JSON object (one
 - `priceRoom` — distance from the trade's entry price to certain resolution (`1 - price`). A 0.92 entry has `0.08` of room; lower = weaker signal.
 - `timeToResolutionDays` — days until the market's resolution date (from Gamma `endDate`). Omitted when the date is unknown. Negative means already past resolution.
 - `positionAction` — whether the trade `OPEN`ed, `INCREASE`d, `REDUCE`d, or `CLOSE`d the wallet's holding of that token (`UNKNOWN` if the positions lookup failed). Derived by comparing the trade against the wallet's current `/positions` snapshot. `walletAvgPrice` / `walletRealizedPnl` / `walletPositionSize` give the wallet's standing in that token. **Note:** the snapshot is read at alert time, not trade time, so classification can be off for wallets trading the same token several times within one poll interval.
+- `walletStats` — the trading wallet's overall track record: total P&L (realized + unrealized) and win rate across all its Polymarket positions (positions with ~zero P&L are excluded from the win-rate sample). Fetched best-effort per wallet and cached for 1 hour, so repeat alerts from the same whale are free. Omitted when the lookup fails. This is the fastest way to judge whether a whale is worth copying: a big bet from a 60%-win-rate, +$50k wallet means far more than the same bet from a chronic loser. The stdout summary shows it as `Whale track record`, alongside `Current midpoint` (with drift since the whale's entry) so you can see whether the price has already run away from the whale's entry before you copy.
 - `signalScore` — composite 0–100 strength, a weighted blend of four normalized sub-signals (`scoreBreakdown`, each 0–1): **size** (`tradeToOiRatio`, saturating at `score_ref_ratio`), **room** (`priceRoom`), **time** (`timeToResolutionDays`, saturating at `score_ref_days`; unknown date → neutral 0.5, past resolution → 0), and **action** (`positionAction`: open 1.0 → close 0.1, unknown 0.5). Weights come from `score_weights` (auto-normalized). Tune the weights/refs to match what you consider a strong signal; set `min_score` to drop everything below a cutoff.
 
 ---
@@ -256,8 +285,9 @@ polytracker/
 ├── types.go         Data structures for API responses and alert payloads
 ├── api.go           HTTP client for Gamma, Data, and CLOB APIs (retry + backoff)
 ├── detector.go      Threshold detection, trade dedup, signal filters, scoring, enrichment
-├── history.go       wallet-history command: realized P&L + win rate by price bucket
+├── history.go       wallet-history + compare commands: realized P&L, win rate, ROI
 ├── alerter.go       Structured JSON alert output via slog
+├── ui.go            Terminal spinner for slow startup phases
 ├── settings.json    Configuration file (edit this)
 └── go.mod           Module definition (stdlib only, no external deps)
 ```

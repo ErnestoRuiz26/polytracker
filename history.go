@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 )
 
@@ -59,6 +60,7 @@ func aggregateHistory(wallet string, resolved []Position) WalletHistory {
 		win := pnl > 0
 
 		h.TotalRealizedPnl += pnl
+		h.TotalInvested += p.InvestedUSD()
 		if win {
 			h.Wins++
 		}
@@ -78,6 +80,9 @@ func aggregateHistory(wallet string, resolved []Position) WalletHistory {
 	}
 	if h.ResolvedCount > 0 {
 		h.OverallWinRate = float64(h.Wins) / float64(h.ResolvedCount)
+	}
+	if h.TotalInvested > 0 {
+		h.ROI = h.TotalRealizedPnl / h.TotalInvested
 	}
 	h.Buckets = buckets
 	return h
@@ -137,27 +142,20 @@ func uniqueConditionIDs(positions []Position) []string {
 	return ids
 }
 
-// RunWalletHistory fetches all of a wallet's positions, determines which markets
-// have resolved, aggregates the realized-P&L / win-rate summary, and prints it.
-func RunWalletHistory(ctx context.Context, client *Client, cfg *Config, wallet string) error {
-	slog.Info("computing wallet history", "wallet", wallet)
-
-	sp := startSpinner("Fetching positions…")
+// buildWalletHistory fetches all of a wallet's positions, determines which
+// markets have resolved, and aggregates the realized-P&L / win-rate summary.
+// Returns the summary plus the total (resolved + open) position count.
+func buildWalletHistory(ctx context.Context, client *Client, cfg *Config, wallet string) (WalletHistory, int, error) {
 	positions, err := client.FetchAllPositions(ctx, wallet)
 	if err != nil {
-		sp.Stop("")
-		return fmt.Errorf("fetch positions: %w", err)
+		return WalletHistory{}, 0, fmt.Errorf("fetch positions: %w", err)
 	}
-	sp.Stop(fmt.Sprintf("Fetched %d positions.", len(positions)))
 	if len(positions) == 0 {
-		fmt.Printf("No positions found for wallet %s\n", wallet)
-		return nil
+		return aggregateHistory(wallet, nil), 0, nil
 	}
 
 	conditionIDs := uniqueConditionIDs(positions)
-	sp = startSpinner(fmt.Sprintf("Checking resolution for %d markets…", len(conditionIDs)))
 	closed := resolveClosedMarkets(ctx, client, conditionIDs, cfg.MaxConcurrency)
-	sp.Stop("")
 
 	var resolved []Position
 	for _, p := range positions {
@@ -166,8 +164,110 @@ func RunWalletHistory(ctx context.Context, client *Client, cfg *Config, wallet s
 		}
 	}
 
-	hist := aggregateHistory(wallet, resolved)
-	printWalletHistory(hist, len(positions))
+	return aggregateHistory(wallet, resolved), len(positions), nil
+}
+
+// RunWalletHistory computes a single wallet's history and prints the summary.
+func RunWalletHistory(ctx context.Context, client *Client, cfg *Config, wallet string) error {
+	slog.Info("computing wallet history", "wallet", wallet)
+
+	sp := startSpinner("Fetching positions and market resolutions…")
+	hist, total, err := buildWalletHistory(ctx, client, cfg, wallet)
+	sp.Stop("")
+	if err != nil {
+		return err
+	}
+	if total == 0 {
+		fmt.Printf("No positions found for wallet %s\n", wallet)
+		return nil
+	}
+
+	printWalletHistory(hist, total)
+	return nil
+}
+
+// Verdict thresholds for the compare command. A wallet is only worth copying
+// when its edge is measured over enough resolved bets to not be noise.
+const (
+	verdictMinSample  = 20   // resolved positions needed for a confident call
+	verdictWinRate    = 0.55 // win rate at/above which a profitable wallet is WATCH
+	verdictAvoidsRate = 0.45 // win rate below which an unprofitable wallet is AVOID
+)
+
+// walletVerdict labels a wallet based on its resolved track record:
+// WATCH = profitable with a strong win rate over a real sample — worth copying.
+func walletVerdict(h WalletHistory) string {
+	if h.ResolvedCount < verdictMinSample {
+		return "LOW SAMPLE"
+	}
+	profitable := h.TotalRealizedPnl > 0
+	switch {
+	case profitable && h.OverallWinRate >= verdictWinRate:
+		return "WATCH"
+	case profitable:
+		return "OK"
+	case h.OverallWinRate < verdictAvoidsRate:
+		return "AVOID"
+	default:
+		return "SKIP"
+	}
+}
+
+// RunWalletCompare builds histories for several wallets and prints them as a
+// ranked table (by total realized P&L) with a copy-worthiness verdict, so the
+// user can decide at a glance which wallets to keep an eye on.
+func RunWalletCompare(ctx context.Context, client *Client, cfg *Config, wallets []string) error {
+	type row struct {
+		hist  WalletHistory
+		total int
+		err   error
+	}
+	rows := make([]row, len(wallets))
+
+	for i, w := range wallets {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		sp := startSpinner(fmt.Sprintf("[%d/%d] Analyzing %s…", i+1, len(wallets), shortID(w)))
+		hist, total, err := buildWalletHistory(ctx, client, cfg, w)
+		sp.Stop("")
+		if err != nil {
+			slog.Warn("wallet analysis failed", "wallet", shortID(w), "error", err)
+		}
+		rows[i] = row{hist: hist, total: total, err: err}
+	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].hist.TotalRealizedPnl > rows[j].hist.TotalRealizedPnl
+	})
+
+	fmt.Printf("\n════════════════════════════════════════════════════════════════════════════════\n")
+	fmt.Printf(" Wallet comparison — ranked by realized P&L (resolved positions only)\n")
+	fmt.Printf("════════════════════════════════════════════════════════════════════════════════\n")
+	fmt.Printf(" %-20s %9s %6s %14s %8s  %s\n", "Wallet", "Resolved", "Win%", "P&L", "ROI", "Verdict")
+	fmt.Printf("────────────────────────────────────────────────────────────────────────────────\n")
+	for _, r := range rows {
+		if r.err != nil {
+			fmt.Printf(" %-20s %s\n", shortID(r.hist.Wallet), "error: "+r.err.Error())
+			continue
+		}
+		roi := "-"
+		if r.hist.TotalInvested > 0 {
+			roi = fmt.Sprintf("%+.1f%%", r.hist.ROI*100)
+		}
+		fmt.Printf(" %-20s %9d %5.0f%% %14s %8s  %s\n",
+			shortID(r.hist.Wallet),
+			r.hist.ResolvedCount,
+			r.hist.OverallWinRate*100,
+			fmt.Sprintf("$%+.2f", r.hist.TotalRealizedPnl),
+			roi,
+			walletVerdict(r.hist))
+	}
+	fmt.Printf("────────────────────────────────────────────────────────────────────────────────\n")
+	fmt.Printf(" WATCH = profitable, win rate ≥ %.0f%%, ≥ %d resolved bets — worth copying.\n",
+		verdictWinRate*100, verdictMinSample)
+	fmt.Printf(" Track one live: ./polytracker track --wallet=<address>\n")
+	fmt.Printf("════════════════════════════════════════════════════════════════════════════════\n\n")
 	return nil
 }
 
@@ -184,6 +284,9 @@ func printWalletHistory(h WalletHistory, totalPositions int) {
 		return
 	}
 	fmt.Printf(" Total realized P&L:    $%+.2f\n", h.TotalRealizedPnl)
+	if h.TotalInvested > 0 {
+		fmt.Printf(" Est. total invested:   $%.2f  (ROI %+.1f%%)\n", h.TotalInvested, h.ROI*100)
+	}
 	fmt.Printf(" Overall win rate:      %.1f%% (%d/%d)\n",
 		h.OverallWinRate*100, h.Wins, h.ResolvedCount)
 	fmt.Printf("──────────────────────────────────────────────────────────────\n")
