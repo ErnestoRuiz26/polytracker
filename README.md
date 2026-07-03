@@ -78,6 +78,35 @@ Builds the same resolved-position history for each wallet and prints a table ran
 
 Verdicts: **WATCH** = profitable with ≥55% win rate over ≥20 resolved bets — worth tracking live (`track --wallet=…`). **OK** = profitable but weaker win rate. **SKIP / AVOID** = unprofitable. **LOW SAMPLE** = fewer than 20 resolved bets, not enough evidence either way.
 
+### Auto-scout (on by default in `track` mode)
+
+The tracker scouts whales for you. Every wallet that trips a whale alert is screened against its overall track record (already fetched during enrichment, so screening is free); wallets that look profitable get the full resolved-history evaluation in the background, and those earning a **WATCH** verdict are persisted to **`watchlist.json`**:
+
+```json
+{
+  "wallets": {
+    "0xa1b2…": {
+      "wallet": "0xa1b2…",
+      "verdict": "WATCH",
+      "realizedPnl": 12480.55,
+      "winRate": 0.61,
+      "roi": 0.234,
+      "resolvedPositions": 142,
+      "triggeredBy": "Will X happen by Y?",
+      "addedAt": "2026-07-03T18:00:00Z",
+      "updatedAt": "2026-07-03T18:00:00Z"
+    }
+  }
+}
+```
+
+- `watchlist.json` is created automatically on first run (and is gitignored — it's your local research).
+- New additions are announced on stdout: `[scout] added 0xa1b2… to watchlist.json — $+12480.55 P&L, 61% win rate, 142 resolved bets (…)`.
+- Wallets already on the list get their stats refreshed (at most once per 24h); a wallet whose verdict degrades stays listed with the new verdict so you can see it fading rather than have it vanish.
+- Evaluations run serially in the background and never delay alerts. Disable with `"auto_scout": false` or `PT_AUTO_SCOUT=false`.
+
+Workflow: leave `./polytracker track` running → review `watchlist.json` → deep-dive candidates with `compare` / `wallet-history` → follow the best live with `track --wallet=…`.
+
 ---
 
 ## Discord Notifications
@@ -141,6 +170,8 @@ All settings live in **`settings.json`** alongside the binary. Edit this file to
 | `score_ref_ratio` | `0.25` | Trade/OI ratio at which the size sub-score saturates to 1.0 (25% of OI = max). |
 | `score_ref_days` | `30` | Days-to-resolution at which the time sub-score saturates to 1.0. |
 | `min_score` | `0` | Signal filter: drop flagged trades whose composite `signalScore` (0–100) is below this. `0` disables (alerts still annotated). |
+| `auto_scout` | `true` | Background-evaluate whale wallets seen in `track` mode and persist WATCH verdicts to the watchlist. |
+| `watchlist_file` | `"watchlist.json"` | Where auto-scout saves watch-worthy wallets. Created automatically if missing. |
 | `discord_webhook_url` | `""` | Discord webhook to push each whale alert to as a rich embed. Empty disables. **Secret** — safe in `settings.json` (gitignored), never logged or printed. |
 | `gamma_base_url` | `"https://gamma-api.polymarket.com"` | Gamma API base URL |
 | `data_base_url` | `"https://data-api.polymarket.com"` | Data API base URL |
@@ -173,6 +204,8 @@ For containerized deployments, every setting can be overridden via environment v
 | `PT_SCORE_REF_RATIO` | `score_ref_ratio` |
 | `PT_SCORE_REF_DAYS` | `score_ref_days` |
 | `PT_MIN_SCORE` | `min_score` |
+| `PT_AUTO_SCOUT` | `auto_scout` |
+| `PT_WATCHLIST_FILE` | `watchlist_file` |
 | `PT_DISCORD_WEBHOOK` | `discord_webhook_url` |
 | `PT_GAMMA_URL` | `gamma_base_url` |
 | `PT_DATA_URL` | `data_base_url` |
@@ -303,6 +336,7 @@ polytracker/
 ├── api.go           HTTP client for Gamma, Data, and CLOB APIs (retry + backoff)
 ├── detector.go      Threshold detection, trade dedup, signal filters, scoring, enrichment
 ├── history.go       wallet-history + compare commands: realized P&L, win rate, ROI
+├── scout.go         Auto-scout: background whale evaluation + watchlist.json persistence
 ├── alerter.go       Structured JSON alert output via slog
 ├── ui.go            Terminal spinner for slow startup phases
 ├── settings.json    Configuration file (edit this)

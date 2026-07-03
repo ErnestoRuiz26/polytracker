@@ -194,22 +194,31 @@ const (
 	verdictAvoidsRate = 0.45 // win rate below which an unprofitable wallet is AVOID
 )
 
+// Verdict labels returned by walletVerdict.
+const (
+	verdictWatch     = "WATCH"
+	verdictOK        = "OK"
+	verdictSkip      = "SKIP"
+	verdictAvoid     = "AVOID"
+	verdictLowSample = "LOW SAMPLE"
+)
+
 // walletVerdict labels a wallet based on its resolved track record:
 // WATCH = profitable with a strong win rate over a real sample — worth copying.
 func walletVerdict(h WalletHistory) string {
 	if h.ResolvedCount < verdictMinSample {
-		return "LOW SAMPLE"
+		return verdictLowSample
 	}
 	profitable := h.TotalRealizedPnl > 0
 	switch {
 	case profitable && h.OverallWinRate >= verdictWinRate:
-		return "WATCH"
+		return verdictWatch
 	case profitable:
-		return "OK"
+		return verdictOK
 	case h.OverallWinRate < verdictAvoidsRate:
-		return "AVOID"
+		return verdictAvoid
 	default:
-		return "SKIP"
+		return verdictSkip
 	}
 }
 
