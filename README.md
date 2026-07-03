@@ -101,7 +101,7 @@ The tracker scouts whales for you. Every wallet that trips a whale alert is scre
 ```
 
 - `watchlist.json` is created automatically on first run (and is gitignored — it's your local research).
-- New additions are announced on stdout: `[scout] added 0xa1b2… to watchlist.json — $+12480.55 P&L, 61% win rate, 142 resolved bets (…)`.
+- New additions are announced on stdout: `[scout] added 0xa1b2… to watchlist.json — $+12480.55 P&L, 61% win rate, 142 resolved bets (…)`. With Discord notifications configured, each new addition is also pushed as a gold embed with the wallet's stats and a ready-to-copy `track --wallet=…` command.
 - Wallets already on the list get their stats refreshed (at most once per 24h); a wallet whose verdict degrades stays listed with the new verdict so you can see it fading rather than have it vanish.
 - Evaluations run serially in the background and never delay alerts. Disable with `"auto_scout": false` or `PT_AUTO_SCOUT=false`.
 

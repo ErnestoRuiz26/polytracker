@@ -40,6 +40,7 @@ const (
 	colorSell  = 0xE74C3C
 	colorStart = 0x3498DB
 	colorStop  = 0x95A5A6
+	colorScout = 0xF1C40F // gold — new WATCH wallet found
 )
 
 // discordPayload is the webhook request body.

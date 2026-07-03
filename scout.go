@@ -136,23 +136,25 @@ type scoutJob struct {
 
 // Scout evaluates whale wallets in the background and maintains the watchlist.
 type Scout struct {
-	client *Client
-	cfg    *Config
-	wl     *Watchlist
+	client   *Client
+	cfg      *Config
+	wl       *Watchlist
+	notifier *DiscordNotifier // nil when Discord notifications are off
 
 	mu      sync.Mutex
 	scouted map[string]time.Time // last evaluation attempt per wallet (session-scoped)
 	queue   chan scoutJob
 }
 
-// NewScout creates a Scout writing to the given watchlist.
-func NewScout(client *Client, cfg *Config, wl *Watchlist) *Scout {
+// NewScout creates a Scout writing to the given watchlist. notifier may be nil.
+func NewScout(client *Client, cfg *Config, wl *Watchlist, notifier *DiscordNotifier) *Scout {
 	return &Scout{
-		client:  client,
-		cfg:     cfg,
-		wl:      wl,
-		scouted: make(map[string]time.Time),
-		queue:   make(chan scoutJob, scoutQueueSize),
+		client:   client,
+		cfg:      cfg,
+		wl:       wl,
+		notifier: notifier,
+		scouted:  make(map[string]time.Time),
+		queue:    make(chan scoutJob, scoutQueueSize),
 	}
 }
 
@@ -256,9 +258,20 @@ func (s *Scout) evaluate(ctx context.Context, job scoutJob) {
 	}
 
 	if isNew {
+		wallet := strings.ToLower(job.wallet)
 		fmt.Printf("[scout] added %s to %s — $%+.2f P&L, %.0f%% win rate, %d resolved bets (triggered by: %s)\n",
-			strings.ToLower(job.wallet), s.cfg.WatchlistFile,
+			wallet, s.cfg.WatchlistFile,
 			hist.TotalRealizedPnl, hist.OverallWinRate*100, hist.ResolvedCount, job.triggeredBy)
+
+		roi := "n/a"
+		if hist.TotalInvested > 0 {
+			roi = fmt.Sprintf("%+.1f%%", hist.ROI*100)
+		}
+		s.notifier.NotifyEvent("🔭 New WATCH wallet scouted",
+			fmt.Sprintf("Wallet: `%s`\nP&L: $%+.2f | Win rate: %.0f%% | ROI: %s | Resolved bets: %d\nTriggered by: %s\nFollow live: `./polytracker track --wallet=%s`",
+				wallet, hist.TotalRealizedPnl, hist.OverallWinRate*100, roi, hist.ResolvedCount,
+				job.triggeredBy, wallet),
+			colorScout)
 	} else {
 		fmt.Printf("[scout] refreshed %s on %s — verdict %s, $%+.2f P&L, %.0f%% win rate\n",
 			shortID(strings.ToLower(job.wallet)), s.cfg.WatchlistFile,

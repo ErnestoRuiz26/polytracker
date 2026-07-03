@@ -92,7 +92,7 @@ func scoutForTest(t *testing.T) *Scout {
 	if err != nil {
 		t.Fatalf("LoadWatchlist: %v", err)
 	}
-	return NewScout(nil, defaults(), wl)
+	return NewScout(nil, defaults(), wl, nil)
 }
 
 func alertWithStats(wallet string, stats *WalletStatsInfo) WhaleTrade {

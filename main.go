@@ -174,7 +174,7 @@ func main() {
 	case "track":
 		if walletID != "" {
 			runWalletMode(ctx, client, detector, alerter, cfg, walletID)
-		} else if err := runMarketMode(ctx, client, detector, alerter, cfg); err != nil {
+		} else if err := runMarketMode(ctx, client, detector, alerter, notifier, cfg); err != nil {
 			slog.Error("market tracking failed", "error", err)
 			notifyStop("\nReason: error — see logs")
 			os.Exit(1)
@@ -256,7 +256,7 @@ func runWalletMode(ctx context.Context, client *Client, detector *Detector, aler
 
 // runMarketMode monitors all active markets, refreshing the tracked-market list
 // on its own interval and polling each market for whale trades.
-func runMarketMode(ctx context.Context, client *Client, detector *Detector, alerter *Alerter, cfg *Config) error {
+func runMarketMode(ctx context.Context, client *Client, detector *Detector, alerter *Alerter, notifier *DiscordNotifier, cfg *Config) error {
 	// Auto-scout: background evaluation of whale wallets into the watchlist.
 	// A load failure disables scouting but never blocks tracking.
 	var scout *Scout
@@ -265,7 +265,7 @@ func runMarketMode(ctx context.Context, client *Client, detector *Detector, aler
 		if err != nil {
 			slog.Warn("auto-scout disabled: watchlist unavailable", "error", err)
 		} else {
-			scout = NewScout(client, cfg, wl)
+			scout = NewScout(client, cfg, wl, notifier)
 			go scout.Run(ctx)
 			fmt.Printf("Auto-scout on: %d wallet(s) currently in %s\n", wl.Len(), cfg.WatchlistFile)
 		}
