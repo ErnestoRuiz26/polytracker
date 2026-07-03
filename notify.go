@@ -34,9 +34,12 @@ const (
 	// notifyMaxAttempts caps retries on a rate-limited (429) post.
 	notifyMaxAttempts = 3
 
-	// Discord embed colors: green for buys, red for sells.
-	colorBuy  = 0x2ECC71
-	colorSell = 0xE74C3C
+	// Discord embed colors: green for buys, red for sells, blue/grey for
+	// lifecycle (start/stop) events.
+	colorBuy   = 0x2ECC71
+	colorSell  = 0xE74C3C
+	colorStart = 0x3498DB
+	colorStop  = 0x95A5A6
 )
 
 // discordPayload is the webhook request body.
@@ -45,11 +48,12 @@ type discordPayload struct {
 }
 
 type discordEmbed struct {
-	Title     string         `json:"title"`
-	URL       string         `json:"url"`
-	Color     int            `json:"color"`
-	Fields    []discordField `json:"fields"`
-	Timestamp string         `json:"timestamp,omitempty"`
+	Title       string         `json:"title"`
+	URL         string         `json:"url,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Color       int            `json:"color"`
+	Fields      []discordField `json:"fields,omitempty"`
+	Timestamp   string         `json:"timestamp,omitempty"`
 }
 
 type discordField struct {
@@ -114,9 +118,36 @@ func (n *DiscordNotifier) Run(ctx context.Context) {
 	}
 }
 
-// post sends one alert to the webhook, honoring Retry-After on 429s.
+// NotifyEvent posts a lifecycle message (start/stop) as a simple embed.
+// Unlike alerts it posts synchronously: the stop event fires while the process
+// is exiting — after the queue drainer's context is already cancelled — so it
+// cannot go through the async queue.
+func (n *DiscordNotifier) NotifyEvent(title, description string, color int) {
+	if n == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), notifyTimeout)
+	defer cancel()
+
+	payload := discordPayload{Embeds: []discordEmbed{{
+		Title:       truncate(title, 256),
+		Description: description,
+		Color:       color,
+		Timestamp:   time.Now().UTC().Format(time.RFC3339),
+	}}}
+	if err := n.postPayload(ctx, payload); err != nil {
+		slog.Warn("discord lifecycle notification failed", "error", err)
+	}
+}
+
+// post sends one alert to the webhook.
 func (n *DiscordNotifier) post(ctx context.Context, alert WhaleTrade) error {
-	body, err := json.Marshal(buildDiscordPayload(alert))
+	return n.postPayload(ctx, buildDiscordPayload(alert))
+}
+
+// postPayload sends a payload to the webhook, honoring Retry-After on 429s.
+func (n *DiscordNotifier) postPayload(ctx context.Context, payload discordPayload) error {
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal payload: %w", err)
 	}

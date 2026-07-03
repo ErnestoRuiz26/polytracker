@@ -145,22 +145,39 @@ func main() {
 	// Drain Discord notifications in the background (nil-safe no-op when off).
 	go notifier.Run(ctx)
 
+	// Lifecycle pings: announce start now, and stop on every exit path. The
+	// error branches call notifyStop explicitly because os.Exit skips defers.
+	startedAt := time.Now()
+	host, _ := os.Hostname()
+	notifier.NotifyEvent("🟢 Polytracker started",
+		fmt.Sprintf("Command: `%s`\nHost: %s", cmdFlag, host), colorStart)
+	notifyStop := func(detail string) {
+		notifier.NotifyEvent("🔴 Polytracker stopped",
+			fmt.Sprintf("Command: `%s`\nHost: %s\nUptime: %s%s",
+				cmdFlag, host, time.Since(startedAt).Round(time.Second), detail), colorStop)
+	}
+	defer notifyStop("")
+
 	switch cmd {
 	case "wallet-history":
 		if err := RunWalletHistory(ctx, client, cfg, historyWallet); err != nil {
 			slog.Error("wallet history failed", "error", err)
+			notifyStop("\nReason: error — see logs")
 			os.Exit(1)
 		}
 	case "compare":
 		if err := RunWalletCompare(ctx, client, cfg, compareWallets); err != nil {
 			slog.Error("wallet compare failed", "error", err)
+			notifyStop("\nReason: error — see logs")
 			os.Exit(1)
 		}
 	case "track":
 		if walletID != "" {
 			runWalletMode(ctx, client, detector, alerter, cfg, walletID)
-		} else {
-			runMarketMode(ctx, client, detector, alerter, cfg)
+		} else if err := runMarketMode(ctx, client, detector, alerter, cfg); err != nil {
+			slog.Error("market tracking failed", "error", err)
+			notifyStop("\nReason: error — see logs")
+			os.Exit(1)
 		}
 	}
 }
@@ -239,7 +256,7 @@ func runWalletMode(ctx context.Context, client *Client, detector *Detector, aler
 
 // runMarketMode monitors all active markets, refreshing the tracked-market list
 // on its own interval and polling each market for whale trades.
-func runMarketMode(ctx context.Context, client *Client, detector *Detector, alerter *Alerter, cfg *Config) {
+func runMarketMode(ctx context.Context, client *Client, detector *Detector, alerter *Alerter, cfg *Config) error {
 	// Auto-scout: background evaluation of whale wallets into the watchlist.
 	// A load failure disables scouting but never blocks tracking.
 	var scout *Scout
@@ -261,8 +278,7 @@ func runMarketMode(ctx context.Context, client *Client, detector *Detector, aler
 	markets, err := refreshMarkets(ctx, client, cfg)
 	if err != nil {
 		sp.Stop("")
-		slog.Error("initial market fetch failed", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("initial market fetch: %w", err)
 	}
 	sp.Stop(fmt.Sprintf("Loaded %d markets. Watching for whale trades…", len(markets)))
 	slog.Info("markets loaded", "count", len(markets))
@@ -270,7 +286,7 @@ func runMarketMode(ctx context.Context, client *Client, detector *Detector, aler
 	// Bail immediately if we were cancelled during the (slow) market load.
 	if ctx.Err() != nil {
 		slog.Info("polytracker stopped (cancelled during startup)")
-		return
+		return nil
 	}
 
 	pollTicker := time.NewTicker(cfg.PollInterval.Duration)
@@ -286,7 +302,7 @@ func runMarketMode(ctx context.Context, client *Client, detector *Detector, aler
 		select {
 		case <-ctx.Done():
 			slog.Info("polytracker stopped")
-			return
+			return nil
 
 		case <-refreshTicker.C:
 			updated, err := refreshMarkets(ctx, client, cfg)

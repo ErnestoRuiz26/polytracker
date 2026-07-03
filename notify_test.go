@@ -21,7 +21,34 @@ func TestNewDiscordNotifierDisabled(t *testing.T) {
 	// Nil notifier must be safe to use.
 	var n *DiscordNotifier
 	n.Notify(WhaleTrade{})
+	n.NotifyEvent("start", "detail", colorStart)
 	n.Run(context.Background()) // returns immediately
+}
+
+func TestNotifyEventPosts(t *testing.T) {
+	var got discordPayload
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Errorf("bad payload: %v", err)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	n := NewDiscordNotifier(srv.URL)
+	n.NotifyEvent("🟢 Polytracker started", "Command: `track`", colorStart)
+
+	if len(got.Embeds) != 1 {
+		t.Fatalf("embeds = %d, want 1", len(got.Embeds))
+	}
+	e := got.Embeds[0]
+	if !strings.Contains(e.Title, "started") || !strings.Contains(e.Description, "track") {
+		t.Errorf("unexpected embed: %+v", e)
+	}
+	if e.Color != colorStart {
+		t.Errorf("color = %#x, want start blue", e.Color)
+	}
 }
 
 func sampleAlert() WhaleTrade {
