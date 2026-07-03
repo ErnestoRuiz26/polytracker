@@ -80,6 +80,21 @@ Verdicts: **WATCH** = profitable with ≥55% win rate over ≥20 resolved bets �
 
 ---
 
+## Discord Notifications
+
+Get every whale alert pushed to a Discord channel:
+
+1. In Discord: channel → ⚙ Edit Channel → Integrations → Webhooks → **New Webhook** → Copy Webhook URL.
+2. Paste it into `settings.json` (`"discord_webhook_url": "https://discord.com/api/webhooks/…"`), or export `PT_DISCORD_WEBHOOK` — handy for a systemd unit on a headless box.
+
+Alerts arrive as rich embeds (green = BUY, red = SELL) mirroring the stdout summary: trade size, outcome, entry price + midpoint drift, signal score, whale track record, and a link to the market.
+
+**Keeping the URL out of GitHub:** `settings.json` matches the `settings.*` pattern in `.gitignore` and is untracked, so the webhook lives only on your machine — no separate secrets file needed. The tool never logs or prints the URL (startup shows only `discord_notifications: on (webhook configured)`), and webhook errors omit it too. The URL is the entire credential — anyone holding it can post to your channel — so if it ever leaks, delete/regenerate the webhook in the channel's Integrations settings.
+
+Delivery is asynchronous: alerts queue and post one at a time, 2s apart (well under Discord's webhook rate limit), with `Retry-After`-aware retries on 429. A slow or down webhook never delays market polling; if the queue overflows, the notification is dropped but the alert still reaches stdout and the session log.
+
+---
+
 ## Configuration
 
 All settings live in **`settings.json`** alongside the binary. Edit this file to tune the detector:
@@ -126,6 +141,7 @@ All settings live in **`settings.json`** alongside the binary. Edit this file to
 | `score_ref_ratio` | `0.25` | Trade/OI ratio at which the size sub-score saturates to 1.0 (25% of OI = max). |
 | `score_ref_days` | `30` | Days-to-resolution at which the time sub-score saturates to 1.0. |
 | `min_score` | `0` | Signal filter: drop flagged trades whose composite `signalScore` (0–100) is below this. `0` disables (alerts still annotated). |
+| `discord_webhook_url` | `""` | Discord webhook to push each whale alert to as a rich embed. Empty disables. **Secret** — safe in `settings.json` (gitignored), never logged or printed. |
 | `gamma_base_url` | `"https://gamma-api.polymarket.com"` | Gamma API base URL |
 | `data_base_url` | `"https://data-api.polymarket.com"` | Data API base URL |
 | `clob_base_url` | `"https://clob.polymarket.com"` | CLOB API base URL |
@@ -157,6 +173,7 @@ For containerized deployments, every setting can be overridden via environment v
 | `PT_SCORE_REF_RATIO` | `score_ref_ratio` |
 | `PT_SCORE_REF_DAYS` | `score_ref_days` |
 | `PT_MIN_SCORE` | `min_score` |
+| `PT_DISCORD_WEBHOOK` | `discord_webhook_url` |
 | `PT_GAMMA_URL` | `gamma_base_url` |
 | `PT_DATA_URL` | `data_base_url` |
 | `PT_CLOB_URL` | `clob_base_url` |

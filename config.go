@@ -85,6 +85,12 @@ type Config struct {
 	// RateLimitRPS caps the total requests per second made by the client.
 	RateLimitRPS int `json:"rate_limit_rps"`
 
+	// DiscordWebhookURL, when set, pushes each whale alert to a Discord channel
+	// via webhook. This is a secret: keep it in settings.json (which is
+	// gitignored) or the PT_DISCORD_WEBHOOK env var — never commit it. The URL
+	// is never logged or printed. Empty disables notifications.
+	DiscordWebhookURL string `json:"discord_webhook_url"`
+
 	// LogLevel sets the verbosity of operational logs on stderr: "debug",
 	// "info", "warn", or "error". Default "warn" keeps the terminal quiet so the
 	// readable whale summaries on stdout stand out; raise it to "info"/"debug"
@@ -183,6 +189,12 @@ func (cfg *Config) PrintSettings() {
 	fmt.Printf("  min_score gate:           %s\n", minScore)
 	fmt.Printf("  score_weights:            size %.2f room %.2f time %.2f action %.2f\n",
 		cfg.ScoreWeights.Size, cfg.ScoreWeights.Room, cfg.ScoreWeights.Time, cfg.ScoreWeights.Action)
+	// Never print the webhook URL itself — it is a posting credential.
+	discord := "off"
+	if cfg.DiscordWebhookURL != "" {
+		discord = "on (webhook configured)"
+	}
+	fmt.Printf("  discord_notifications:    %s\n", discord)
 	fmt.Printf("  log_level:                %s\n", cfg.LogLevel)
 	fmt.Println()
 }
@@ -234,6 +246,7 @@ func applyEnvOverrides(cfg *Config) {
 	envFloat("PT_SCORE_REF_RATIO", &cfg.ScoreRefRatio)
 	envFloat("PT_SCORE_REF_DAYS", &cfg.ScoreRefDays)
 	envFloat("PT_MIN_SCORE", &cfg.MinScore)
+	envStrInto("PT_DISCORD_WEBHOOK", &cfg.DiscordWebhookURL)
 	envStrInto("PT_GAMMA_URL", &cfg.GammaBaseURL)
 	envStrInto("PT_DATA_URL", &cfg.DataBaseURL)
 	envStrInto("PT_CLOB_URL", &cfg.CLOBBaseURL)

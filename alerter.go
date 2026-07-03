@@ -14,24 +14,29 @@ import (
 
 // Alerter handles formatting and emitting whale trade alerts.
 type Alerter struct {
-	logger *slog.Logger
+	logger   *slog.Logger
+	notifier *DiscordNotifier // nil when Discord notifications are off
 }
 
-// NewAlerter creates an Alerter that writes JSON to the provided writer.
-func NewAlerter(w io.Writer) *Alerter {
+// NewAlerter creates an Alerter that writes JSON to the provided writer and,
+// when notifier is non-nil, pushes each alert to Discord.
+func NewAlerter(w io.Writer, notifier *DiscordNotifier) *Alerter {
 	return &Alerter{
 		logger: slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{
 			// Alerts are always at INFO level — never suppressed.
 			Level: slog.LevelInfo,
 		})),
+		notifier: notifier,
 	}
 }
 
 // EmitAlert records a whale trade: the full structured JSON goes to the
-// session log file, and a human-readable summary is printed to stdout.
+// session log file, a human-readable summary is printed to stdout, and the
+// alert is queued for Discord (no-op when notifications are off).
 func (a *Alerter) EmitAlert(alert WhaleTrade) {
 	a.logJSON(alert)
 	printSummary(alert)
+	a.notifier.Notify(alert)
 }
 
 // logJSON writes the full alert struct as a single JSON line to the log file.

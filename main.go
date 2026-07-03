@@ -118,7 +118,8 @@ func main() {
 	client := NewClient(cfg)
 	defer client.Close()
 	detector := NewDetector(client, cfg)
-	alerter := NewAlerter(logFile)
+	notifier := NewDiscordNotifier(cfg.DiscordWebhookURL) // nil when unconfigured
+	alerter := NewAlerter(logFile, notifier)
 
 	slog.Info("polytracker starting",
 		"command", cmdFlag,
@@ -140,6 +141,9 @@ func main() {
 		slog.Info("received signal, shutting down", "signal", sig.String())
 		cancel()
 	}()
+
+	// Drain Discord notifications in the background (nil-safe no-op when off).
+	go notifier.Run(ctx)
 
 	switch cmd {
 	case "wallet-history":
