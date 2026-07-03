@@ -77,6 +77,18 @@ type Config struct {
 	// value (0-100). 0 disables the gate (alerts are still annotated with the score).
 	MinScore float64 `json:"min_score"`
 
+	// --- Auto-scout ---
+
+	// AutoScout enables background evaluation of whale wallets seen in market
+	// mode: wallets whose alerts pass a cheap track-record prefilter get the
+	// full resolved-history analysis, and WATCH verdicts are persisted to
+	// WatchlistFile.
+	AutoScout bool `json:"auto_scout"`
+
+	// WatchlistFile is where auto-scout persists watch-worthy wallets. Created
+	// automatically if missing.
+	WatchlistFile string `json:"watchlist_file"`
+
 	// API base URLs — separated so they can be pointed at proxies or mocks.
 	GammaBaseURL string `json:"gamma_base_url"`
 	DataBaseURL  string `json:"data_base_url"`
@@ -183,6 +195,11 @@ func (cfg *Config) PrintSettings() {
 	fmt.Printf("  min_score gate:           %s\n", minScore)
 	fmt.Printf("  score_weights:            size %.2f room %.2f time %.2f action %.2f\n",
 		cfg.ScoreWeights.Size, cfg.ScoreWeights.Room, cfg.ScoreWeights.Time, cfg.ScoreWeights.Action)
+	autoScout := "off"
+	if cfg.AutoScout {
+		autoScout = "on → " + cfg.WatchlistFile
+	}
+	fmt.Printf("  auto_scout:               %s\n", autoScout)
 	fmt.Printf("  log_level:                %s\n", cfg.LogLevel)
 	fmt.Println()
 }
@@ -197,6 +214,8 @@ func defaults() *Config {
 		MinOpenInterest:       10000,
 		MaxOpenInterest:       0,
 		MaxMarketsPerCycle:    500,
+		AutoScout:             true,
+		WatchlistFile:         "watchlist.json",
 		GammaBaseURL:          "https://gamma-api.polymarket.com",
 		DataBaseURL:           "https://data-api.polymarket.com",
 		CLOBBaseURL:           "https://clob.polymarket.com",
@@ -234,6 +253,8 @@ func applyEnvOverrides(cfg *Config) {
 	envFloat("PT_SCORE_REF_RATIO", &cfg.ScoreRefRatio)
 	envFloat("PT_SCORE_REF_DAYS", &cfg.ScoreRefDays)
 	envFloat("PT_MIN_SCORE", &cfg.MinScore)
+	envBool("PT_AUTO_SCOUT", &cfg.AutoScout)
+	envStrInto("PT_WATCHLIST_FILE", &cfg.WatchlistFile)
 	envStrInto("PT_GAMMA_URL", &cfg.GammaBaseURL)
 	envStrInto("PT_DATA_URL", &cfg.DataBaseURL)
 	envStrInto("PT_CLOB_URL", &cfg.CLOBBaseURL)
@@ -268,6 +289,14 @@ func envFloat(key string, dst *float64) {
 	if v := os.Getenv(key); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			*dst = f
+		}
+	}
+}
+
+func envBool(key string, dst *bool) {
+	if v := os.Getenv(key); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			*dst = b
 		}
 	}
 }

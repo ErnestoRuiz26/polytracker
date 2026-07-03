@@ -236,6 +236,20 @@ func runWalletMode(ctx context.Context, client *Client, detector *Detector, aler
 // runMarketMode monitors all active markets, refreshing the tracked-market list
 // on its own interval and polling each market for whale trades.
 func runMarketMode(ctx context.Context, client *Client, detector *Detector, alerter *Alerter, cfg *Config) {
+	// Auto-scout: background evaluation of whale wallets into the watchlist.
+	// A load failure disables scouting but never blocks tracking.
+	var scout *Scout
+	if cfg.AutoScout {
+		wl, err := LoadWatchlist(cfg.WatchlistFile)
+		if err != nil {
+			slog.Warn("auto-scout disabled: watchlist unavailable", "error", err)
+		} else {
+			scout = NewScout(client, cfg, wl)
+			go scout.Run(ctx)
+			fmt.Printf("Auto-scout on: %d wallet(s) currently in %s\n", wl.Len(), cfg.WatchlistFile)
+		}
+	}
+
 	// Bootstrap: fetch markets before entering the main loop. This issues one
 	// OI call per market and can take ~10s+, so show progress — operational logs
 	// are quiet by default and the wait would otherwise look like a freeze.
@@ -262,7 +276,7 @@ func runMarketMode(ctx context.Context, client *Client, detector *Detector, aler
 	defer refreshTicker.Stop()
 
 	// Run one poll cycle immediately, then enter the tick loop.
-	runPollCycle(ctx, detector, alerter, markets, cfg.MaxConcurrency)
+	runPollCycle(ctx, detector, alerter, scout, markets, cfg.MaxConcurrency)
 
 	for {
 		select {
@@ -280,7 +294,7 @@ func runMarketMode(ctx context.Context, client *Client, detector *Detector, aler
 			}
 
 		case <-pollTicker.C:
-			runPollCycle(ctx, detector, alerter, markets, cfg.MaxConcurrency)
+			runPollCycle(ctx, detector, alerter, scout, markets, cfg.MaxConcurrency)
 		}
 	}
 }
@@ -354,8 +368,8 @@ func refreshMarkets(ctx context.Context, client *Client, cfg *Config) ([]Tracked
 }
 
 // runPollCycle fans out CheckMarket calls across all markets using a
-// semaphore-bounded goroutine pool.
-func runPollCycle(ctx context.Context, detector *Detector, alerter *Alerter, markets []TrackedMarket, maxConcurrency int) {
+// semaphore-bounded goroutine pool. scout may be nil (auto-scout disabled).
+func runPollCycle(ctx context.Context, detector *Detector, alerter *Alerter, scout *Scout, markets []TrackedMarket, maxConcurrency int) {
 	if len(markets) == 0 {
 		return
 	}
@@ -404,6 +418,11 @@ func runPollCycle(ctx context.Context, detector *Detector, alerter *Alerter, mar
 	wg.Wait()
 
 	emitAll(alerter, allAlerts)
+
+	// Hand fresh whale wallets to the scout for background evaluation.
+	if scout != nil && ctx.Err() == nil {
+		scout.Consider(allAlerts)
+	}
 
 	// Don't emit summary if we're shutting down — it would be misleading.
 	if ctx.Err() == nil {
