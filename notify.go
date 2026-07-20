@@ -203,6 +203,11 @@ func buildDiscordPayload(alert WhaleTrade) discordPayload {
 		{Name: "Entry price", Value: fmt.Sprintf("%.3f (room %.3f)", alert.Trade.Price, alert.Context.PriceRoom), Inline: true},
 		{Name: "Signal score", Value: fmt.Sprintf("%.0f/100", alert.Context.SignalScore), Inline: true},
 	}
+	if pct, ok := profitIfCorrect(alert.Trade.Price); ok {
+		fields = append(fields, discordField{
+			Name: "Profit if correct", Value: fmt.Sprintf("+%.0f%%", pct), Inline: true,
+		})
+	}
 	if mid := alert.Context.CurrentMidpoint; mid > 0 {
 		fields = append(fields, discordField{
 			Name: "Current midpoint", Value: fmt.Sprintf("%.3f (drift %+.3f)", mid, mid-alert.Trade.Price), Inline: true,

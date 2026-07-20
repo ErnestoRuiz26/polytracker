@@ -120,25 +120,37 @@ func TestActionScore(t *testing.T) {
 }
 
 func TestComputeScore(t *testing.T) {
-	cfg := defaults() // size .40 room .15 time .15 action .30, refRatio .25, refDays 30
+	cfg := defaults() // size .40 room .25 time .15 action .20, refRatio .25, refDays 30
 
-	t.Run("strong signal scores high", func(t *testing.T) {
-		// Big trade (saturates size), cheap entry, far out, opening.
-		got, _ := computeScore(cfg, 0.30, 0.70, 60, actionOpen)
-		// size 1.0, room 0.70, time 1.0, action 1.0 -> (.40+.105+.15+.30)/1.0*100
-		want := 95.5
+	t.Run("insider pattern scores high", func(t *testing.T) {
+		// Big trade (saturates size), cheap entry, resolving soon, opening.
+		got, _ := computeScore(cfg, 0.30, 0.70, 5, actionOpen)
+		// size 1.0, room 0.70, time 1-5/30=.8333, action 1.0
+		want := 100 * (0.40*1.0 + 0.25*0.70 + 0.15*(1-5.0/30.0) + 0.20*1.0)
 		if math.Abs(got-want) > 1e-6 {
 			t.Errorf("score = %v, want %v", got, want)
 		}
 	})
 
 	t.Run("weak signal scores low", func(t *testing.T) {
-		// Just over threshold, near-1 price, closing.
-		got, _ := computeScore(cfg, 0.05, 0.05, 1, actionClose)
-		// size .2, room .05, time 1/30=.0333, action .1
-		want := 100 * (0.40*0.2 + 0.15*0.05 + 0.15*(1.0/30.0) + 0.30*0.1)
+		// Just over threshold, near-1 price, far out, closing.
+		got, _ := computeScore(cfg, 0.05, 0.05, 25, actionClose)
+		// size .2, room .05, time 1-25/30=.1667, action .1
+		want := 100 * (0.40*0.2 + 0.25*0.05 + 0.15*(1-25.0/30.0) + 0.20*0.1)
 		if math.Abs(got-want) > 1e-6 {
 			t.Errorf("score = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("imminent resolution scores higher than distant", func(t *testing.T) {
+		soon, _ := computeScore(cfg, 0.10, 0.5, 2, actionOpen)
+		far, _ := computeScore(cfg, 0.10, 0.5, 29, actionOpen)
+		if soon <= far {
+			t.Errorf("imminent should outrank distant: soon=%v far=%v", soon, far)
+		}
+		_, b := computeScore(cfg, 0.10, 0.5, 60, actionOpen)
+		if b["time"] != 0 {
+			t.Errorf("beyond refDays time sub-score = %v, want 0", b["time"])
 		}
 	})
 
@@ -151,8 +163,8 @@ func TestComputeScore(t *testing.T) {
 	})
 
 	t.Run("more size is monotonic", func(t *testing.T) {
-		lo, _ := computeScore(cfg, 0.06, 0.5, 30, actionOpen)
-		hi, _ := computeScore(cfg, 0.20, 0.5, 30, actionOpen)
+		lo, _ := computeScore(cfg, 0.06, 0.5, 10, actionOpen)
+		hi, _ := computeScore(cfg, 0.20, 0.5, 10, actionOpen)
 		if hi <= lo {
 			t.Errorf("bigger ratio should score higher: lo=%v hi=%v", lo, hi)
 		}

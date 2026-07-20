@@ -186,12 +186,16 @@ func clamp01(x float64) float64 {
 }
 
 // computeScore combines the annotated sub-signals into a 0-100 composite
-// signal score plus the per-signal breakdown. Each sub-signal is normalized to
-// [0,1], then blended by the configured (auto-normalized) weights:
+// suspicion score plus the per-signal breakdown. The score models the insider
+// pattern: a large bet on an unlikely outcome resolving soon. Each sub-signal
+// is normalized to [0,1], then blended by the configured (auto-normalized)
+// weights:
 //
 //   - size:   trade/OI ratio, saturating at cfg.ScoreRefRatio
-//   - room:   price room to resolution (1 - price)
-//   - time:   days to resolution, saturating at cfg.ScoreRefDays;
+//   - room:   price room to resolution (1 - price) — the profit potential;
+//     a near-1 entry has almost none, a cheap longshot has a lot
+//   - time:   imminence — 1.0 when resolution is now, falling to 0 at
+//     cfg.ScoreRefDays out. Insider bets cluster near imminent events;
 //     unknown date (days == 0) is treated as neutral 0.5
 //   - action: position action (open/increase/reduce/close)
 //
@@ -212,8 +216,8 @@ func computeScore(cfg *Config, ratio, room, days float64, action string) (float6
 		sTime = 0.5
 	case days < 0: // already past resolution
 		sTime = 0
-	default:
-		sTime = clamp01(days / cfg.ScoreRefDays)
+	default: // sooner = more suspicious
+		sTime = clamp01(1 - days/cfg.ScoreRefDays)
 	}
 	sAction := actionScore(action)
 

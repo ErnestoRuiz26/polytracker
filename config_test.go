@@ -22,6 +22,16 @@ func TestDefaults(t *testing.T) {
 	if cfg.LogLevel != "warn" {
 		t.Errorf("LogLevel = %q, want warn", cfg.LogLevel)
 	}
+	// Insider-pattern defaults: price ceiling and USD floor on by default.
+	if cfg.MaxSignalPrice != 0.60 {
+		t.Errorf("MaxSignalPrice = %v, want 0.60", cfg.MaxSignalPrice)
+	}
+	if cfg.MinTradeUSD != 1000 {
+		t.Errorf("MinTradeUSD = %v, want 1000", cfg.MinTradeUSD)
+	}
+	if w := cfg.ScoreWeights; w.Size != 0.40 || w.Room != 0.25 || w.Time != 0.15 || w.Action != 0.20 {
+		t.Errorf("ScoreWeights = %+v, want {0.40 0.25 0.15 0.20}", w)
+	}
 }
 
 func TestParseLogLevel(t *testing.T) {

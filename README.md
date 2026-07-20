@@ -137,10 +137,10 @@ All settings live in **`settings.json`** alongside the binary. Edit this file to
   "min_open_interest": 10000,
   "max_open_interest": 0,
   "max_markets_per_cycle": 500,
-  "min_trade_usd": 0,
-  "max_signal_price": 0,
+  "min_trade_usd": 1000,
+  "max_signal_price": 0.60,
   "min_time_to_resolution": "0s",
-  "score_weights": { "size": 0.40, "room": 0.15, "time": 0.15, "action": 0.30 },
+  "score_weights": { "size": 0.40, "room": 0.25, "time": 0.15, "action": 0.20 },
   "score_ref_ratio": 0.25,
   "score_ref_days": 30,
   "min_score": 0,
@@ -163,12 +163,12 @@ All settings live in **`settings.json`** alongside the binary. Edit this file to
 | `min_open_interest` | `10000` | Minimum open interest (USD) — markets below this are ignored |
 | `max_open_interest` | `0` | Maximum open interest (USD) — `0` means no upper limit |
 | `max_markets_per_cycle` | `500` | Cap on total markets to monitor |
-| `min_trade_usd` | `0` | Signal filter: drop flagged trades below this absolute USD value. `0` disables (alerts still annotated). |
-| `max_signal_price` | `0` | Signal filter: drop flagged trades executed above this price (0–1). Near-1.0 = little room to resolution. `0` disables. |
+| `min_trade_usd` | `1000` | Signal filter: drop flagged trades below this absolute USD value — an insider bet is a sizeable one. `0` disables. |
+| `max_signal_price` | `0.60` | Signal filter: drop flagged trades executed above this price (0–1). Bets above ~0.60 are on likely outcomes with little profit potential — not the insider pattern. `0` disables. |
 | `min_time_to_resolution` | `"0s"` | Signal filter: drop flagged trades in markets resolving sooner than this. `"0s"` disables. |
-| `score_weights` | `{size:0.40, room:0.15, time:0.15, action:0.30}` | Relative weight of each sub-signal in the composite `signalScore`. Auto-normalized — need not sum to 1. |
+| `score_weights` | `{size:0.40, room:0.25, time:0.15, action:0.20}` | Relative weight of each sub-signal in the composite `signalScore`. Auto-normalized — need not sum to 1. |
 | `score_ref_ratio` | `0.25` | Trade/OI ratio at which the size sub-score saturates to 1.0 (25% of OI = max). |
-| `score_ref_days` | `30` | Days-to-resolution at which the time sub-score saturates to 1.0. |
+| `score_ref_days` | `30` | Imminence horizon: the time sub-score is 1.0 at 0 days to resolution and falls to 0 at this many days out. |
 | `min_score` | `0` | Signal filter: drop flagged trades whose composite `signalScore` (0–100) is below this. `0` disables (alerts still annotated). |
 | `auto_scout` | `true` | Background-evaluate whale wallets seen in `track` mode and persist WATCH verdicts to the watchlist. |
 | `watchlist_file` | `"watchlist.json"` | Where auto-scout saves watch-worthy wallets. Created automatically if missing. |
@@ -251,7 +251,7 @@ Every 60s per market (reusing the OI from the last refresh):
 
 - **Markets are refreshed every 5 minutes** — filtered by an OI floor and optional ceiling to skip illiquid or mega-markets
 - **Trade deduplication** — timestamps are tracked per-market so the same trade is never flagged twice
-- **Signal-quality filters & scoring** — flagged trades are annotated with `priceRoom`, `timeToResolutionDays`, `positionAction`, and a composite `signalScore`; optional hard filters (`min_trade_usd`, `max_signal_price`, `min_time_to_resolution`, `min_score`) drop weak signals. All default-off — zero behavior change until tuned.
+- **Signal-quality filters & scoring** — flagged trades are annotated with `priceRoom`, `timeToResolutionDays`, `positionAction`, and a composite `signalScore`; hard filters (`min_trade_usd`, `max_signal_price`, `min_time_to_resolution`, `min_score`) drop weak signals. Defaults target the insider pattern: trades ≥ $1000 at price ≤ 0.60 — large bets on unlikely outcomes with real profit potential.
 - **Graceful degradation** — if enrichment calls fail (midpoint, book, holders, positions), the alert still fires with partial context
 - **Clean shutdown** — `Ctrl+C` / `SIGTERM` drains in-flight checks without noisy errors
 
@@ -322,7 +322,7 @@ Each whale trade is recorded two ways: a single-line structured JSON object (one
 - `timeToResolutionDays` — days until the market's resolution date (from Gamma `endDate`). Omitted when the date is unknown. Negative means already past resolution.
 - `positionAction` — whether the trade `OPEN`ed, `INCREASE`d, `REDUCE`d, or `CLOSE`d the wallet's holding of that token (`UNKNOWN` if the positions lookup failed). Derived by comparing the trade against the wallet's current `/positions` snapshot. `walletAvgPrice` / `walletRealizedPnl` / `walletPositionSize` give the wallet's standing in that token. **Note:** the snapshot is read at alert time, not trade time, so classification can be off for wallets trading the same token several times within one poll interval.
 - `walletStats` — the trading wallet's overall track record: total P&L (realized + unrealized) and win rate across all its Polymarket positions (positions with ~zero P&L are excluded from the win-rate sample). Fetched best-effort per wallet and cached for 1 hour, so repeat alerts from the same whale are free. Omitted when the lookup fails. This is the fastest way to judge whether a whale is worth copying: a big bet from a 60%-win-rate, +$50k wallet means far more than the same bet from a chronic loser. The stdout summary shows it as `Whale track record`, alongside `Current midpoint` (with drift since the whale's entry) so you can see whether the price has already run away from the whale's entry before you copy.
-- `signalScore` — composite 0–100 strength, a weighted blend of four normalized sub-signals (`scoreBreakdown`, each 0–1): **size** (`tradeToOiRatio`, saturating at `score_ref_ratio`), **room** (`priceRoom`), **time** (`timeToResolutionDays`, saturating at `score_ref_days`; unknown date → neutral 0.5, past resolution → 0), and **action** (`positionAction`: open 1.0 → close 0.1, unknown 0.5). Weights come from `score_weights` (auto-normalized). Tune the weights/refs to match what you consider a strong signal; set `min_score` to drop everything below a cutoff.
+- `signalScore` — composite 0–100 strength, a weighted blend of four normalized sub-signals (`scoreBreakdown`, each 0–1): **size** (`tradeToOiRatio`, saturating at `score_ref_ratio`), **room** (`priceRoom`), **time** (imminence: 1.0 when resolving now, 0 at `score_ref_days` or beyond — insider bets cluster near imminent events; unknown date → neutral 0.5, past resolution → 0), and **action** (`positionAction`: open 1.0 → close 0.1, unknown 0.5). Weights come from `score_weights` (auto-normalized). Tune the weights/refs to match what you consider a strong signal; set `min_score` to drop everything below a cutoff.
 
 ---
 

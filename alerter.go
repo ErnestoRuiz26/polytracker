@@ -77,6 +77,9 @@ func printSummary(alert WhaleTrade) {
 	}
 	fmt.Printf("Predicted outcome:     %s\n", alert.Trade.Outcome)
 	fmt.Printf("Entry price:           %.3f  (room to 1.0: %.3f)\n", alert.Trade.Price, alert.Context.PriceRoom)
+	if pct, ok := profitIfCorrect(alert.Trade.Price); ok {
+		fmt.Printf("Profit if correct:     +%.0f%%\n", pct)
+	}
 	if mid := alert.Context.CurrentMidpoint; mid > 0 {
 		fmt.Printf("Current midpoint:      %.3f  (drift since whale entry: %+.3f)\n",
 			mid, mid-alert.Trade.Price)
@@ -89,6 +92,16 @@ func printSummary(alert WhaleTrade) {
 		alert.Context.SignalScore, b["size"], b["room"], b["time"], b["action"])
 	fmt.Printf("Market Link:           %s\n", alert.Market.MarketURL)
 	fmt.Printf("__________________________________________________\n\n")
+}
+
+// profitIfCorrect returns the percentage return on stake if the bet resolves
+// in the whale's favor (shares pay out 1.0 each). ok is false for degenerate
+// prices where the number is meaningless.
+func profitIfCorrect(price float64) (pct float64, ok bool) {
+	if price <= 0 || price >= 1 {
+		return 0, false
+	}
+	return (1 - price) / price * 100, true
 }
 
 // EmitSummary logs a cycle summary — useful for health monitoring.

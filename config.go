@@ -198,6 +198,15 @@ func (cfg *Config) PrintSettings() {
 	fmt.Printf("  max_markets_per_cycle:    %d\n", cfg.MaxMarketsPerCycle)
 	fmt.Printf("  max_concurrency:          %d\n", cfg.MaxConcurrency)
 	fmt.Printf("  rate_limit_rps:           %d\n", cfg.RateLimitRPS)
+	maxPrice := "disabled"
+	if cfg.MaxSignalPrice > 0 {
+		maxPrice = fmt.Sprintf("%.2f", cfg.MaxSignalPrice)
+	}
+	minTrade := "disabled"
+	if cfg.MinTradeUSD > 0 {
+		minTrade = fmt.Sprintf("$%.0f", cfg.MinTradeUSD)
+	}
+	fmt.Printf("  signal filters:           max_price %s / min_trade %s\n", maxPrice, minTrade)
 	fmt.Printf("  min_score gate:           %s\n", minScore)
 	fmt.Printf("  score_weights:            size %.2f room %.2f time %.2f action %.2f\n",
 		cfg.ScoreWeights.Size, cfg.ScoreWeights.Room, cfg.ScoreWeights.Time, cfg.ScoreWeights.Action)
@@ -233,11 +242,16 @@ func defaults() *Config {
 		CLOBBaseURL:           "https://clob.polymarket.com",
 		RateLimitRPS:          10,
 		LogLevel:              "warn",
+		// Insider-pattern defaults: only flag sizeable bets on unlikely
+		// outcomes. Near-certain entries (price > 0.60) carry no information
+		// worth copying, and sub-$1000 trades aren't conviction.
+		MinTradeUSD:    1000,
+		MaxSignalPrice: 0.60,
 		ScoreWeights: ScoreWeights{
 			Size:   0.40,
-			Room:   0.15,
+			Room:   0.25,
 			Time:   0.15,
-			Action: 0.30,
+			Action: 0.20,
 		},
 		ScoreRefRatio: 0.25,
 		ScoreRefDays:  30,
